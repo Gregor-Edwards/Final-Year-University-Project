@@ -1260,6 +1260,23 @@ def calculate_fad(real_features, generated_features):
 
 
 
+
+# Optimisers
+
+def get_optimiser(model, learning_rate, optimiser_type='adam'):
+    if optimiser_type == 'adam':
+        return torch.optim.Adam(model.parameters(), lr=learning_rate)
+    elif optimiser_type == 'sgd':
+        return torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    elif optimiser_type == 'rmsprop':
+        return torch.optim.RMSprop(model.parameters(), lr=learning_rate)
+    elif optimiser_type == 'adamw':
+        return torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    else:
+        raise ValueError(f"Unknown optimizer type: {optimiser_type}")
+
+
+
 # Saving models and samples
 
 def save_model(model, run_name="Audio class conditioned", epochs=0, upload_model=True):
@@ -1363,14 +1380,17 @@ if __name__ == '__main__':
     # Hyperparameters
 
     epochs = 20 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
-    timesteps = [10] # 1000
+    timesteps = [1000] # 1000
     beta_starts = [0.0001] # Noise scheduler start
     beta_ends = [0.0004] # Noise scheduler end
     learning_rates = [1e-5, 1e-4, 1e-3]
-    dim_mults = [(1, 2, 4,) , (1, 2, 4,8,)] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
+    dim_mults = [(1, 2, 4,) , (1, 2, 4, 8,)] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
     emb_dims = [5, 10] # num_classes // 2 # The number of (conditional / class / genre) dimensions that are appended to the input image
+    loss_type=["huber"]
 
 
+    # TODO: Test different loss types, optimisers, learning rate schedules, noise schedules, weight initialisation techniques
+    # Next step: learning rate scheduler
 
     # Constants
 
@@ -1390,11 +1410,11 @@ if __name__ == '__main__':
     target_seconds=5 # Length of the mel-spectrograms to be generated and used as input to the model
 
     # Calculate total number of runs
-    total_runs = len(list(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims)))
+    total_runs = len(list(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims, loss_type)))
 
     # Perform multiple runs sequencially
-    for i, (timestep, beta_start, beta_end, learning_rate, architecture, emb_dim) in enumerate(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims)):
-        print(f"Preparing to run {i+1}/{total_runs} with parameters: timestep={timestep}, beta_start={beta_start}, beta_end={beta_end}, learning_rate={learning_rate}, architecture={architecture}, emb_dim={emb_dim}")
+    for i, (timestep, beta_start, beta_end, learning_rate, architecture, emb_dim, loss_type) in enumerate(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims, loss_type)):
+        print(f"Preparing to run {i+1}/{total_runs} with parameters: timestep={timestep}, beta_start={beta_start}, beta_end={beta_end}, learning_rate={learning_rate}, architecture={architecture}, emb_dim={emb_dim}, loss_type={loss_type}")
 
 
         # define beta schedule (a bad beta schedule that contains too much noise too early may make the model learn to produce blank mel-spectrograms)
@@ -1426,7 +1446,7 @@ if __name__ == '__main__':
         print("Current Date:", date_str)
 
 
-        run_name = f'{date_str}_{time_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_learning_rate_{len(dim_mults)}_layers_{emb_dim}_emb_dim'
+        run_name = f'Run_{i+1}_Date_{date_str}_Time_{time_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_learning_rate_{len(architecture)}_layers_{emb_dim}_emb_dim_{loss_type}_loss'
 
         # start a new wandb run to track this script
         wandb.init(
@@ -1439,12 +1459,14 @@ if __name__ == '__main__':
             # track hyperparameters and run metadata
             config={
             "epochs": epochs,
+            "batch_size": batch_size,
             "timesteps": timestep,
             "beta_start": beta_start,
             "beta_end": beta_end,
             "learning_rate": learning_rate,
             "architecture": "CNN",
-            "number_of_layers": len(dim_mults),
+            "number_of_layers": len(architecture),
+            "loss_type": loss_type,
             "dataset": "GTZAN",
             }
         )
@@ -1614,14 +1636,14 @@ if __name__ == '__main__':
                 # Algorithm 1 line 3: sample t uniformally for every example in the batch
                 t = torch.randint(0, timestep, (batch_size,), device=device).long()
 
-                loss = p_losses(model, batch_mels, t, batch_labels, loss_type="huber")
+                loss = p_losses(model, batch_mels, t, batch_labels, loss_type=loss_type)
 
                 # Log the loss from the batch
                 #all_losses.append(loss.item()) # Append loss to the list
                 running_loss+=loss.item()
                 
                 # log metrics to wandb
-                wandb.log({"loss": loss})
+                wandb.log({f'{loss_type}_loss': loss})
 
                 # Update the model weights and optimiser
                 loss.backward()
