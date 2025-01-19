@@ -31,6 +31,17 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 import torch.nn.functional as F # to access various functions for neural networks, like activation functions and loss calculations
 import random
 
+# Weights and Biases
+import wandb
+from itertools import product
+from datetime import datetime
+
+# Frechet Audio Distance measure 
+from scipy.linalg import sqrtm
+from torchaudio.transforms import MelSpectrogram
+from torchvision.models import inception_v3
+from torch.utils.data import DataLoader
+
 
 
 # Utility methods
@@ -508,8 +519,8 @@ def mel_spectrogram_to_audio(mel_spectrogram, phase, sr, n_fft=2048, hop_length=
 # #     y = librosa.griffinlim(S, n_iter=n_iter, hop_length=hop_length, win_length=win_length)
 # #     return y
 
-def plot_mel_spectrogram(mel_spectrogram, sr, output_file=None):
-    """Plots a mel-spectrogram""" #after converting to the DB scale"""
+def plot_mel_spectrogram(mel_spectrogram, sr, display_plot=True, output_file=None):
+    """Plots a mel-spectrogram and optionally save locally""" #after converting to the DB scale"""
 
     # Remove the extra dimension if present
     if len(mel_spectrogram.shape) == 3:
@@ -538,11 +549,11 @@ def plot_mel_spectrogram(mel_spectrogram, sr, output_file=None):
         print(f'Saved mel_spectrogram_db to {output_file}')
 
 
-    plt.show()
+    if display_plot:
+        plt.show()
 
-
-    # free up memory after plotting    
-    plt.close() 
+    # free up memory after plotting and clear the image   
+    plt.close()
 
 # source: https://pytorch.org/vision/stable/auto_examples/plot_transforms.html#sphx-glr-auto-examples-plot-transforms-py
 def plot(imgs, with_orig=False, row_title=None, **imshow_kwargs):
@@ -978,11 +989,12 @@ class ClassConditionalUnet(Unet):
         resnet_block_groups=8,       # Groups for ResNet blocks (GroupNorm)
         use_convnext=True,           # Whether to use ConvNeXt blocks
         convnext_mult=2,             # Multiplier for ConvNeXt blocks
-        num_classes=None
+        num_classes=None,
+        emb_dim=0
     ):
 
         self.num_classes = num_classes
-        emb_dim = num_classes // 2 # Hyperparameter
+        emb_dim = emb_dim # Hyperparameter
         print("EMBEDDING DIMENSION: ", emb_dim)
         if self.num_classes is not None:
             #self.label_emb = nn.Embedding(num_classes, num_classes) #self.time_dim)
@@ -1135,7 +1147,7 @@ def p_sample(model, x, t, t_index, labels=None): #, betas, sqrt_one_minus_alphas
         return model_mean + torch.sqrt(posterior_variance_t) * noise
 
 @torch.no_grad()
-def p_sample_loop(model, shape, labels=None): # Algorithm 2 but save all images:
+def p_sample_loop(model, shape, labels=None, timesteps=0): # Algorithm 2 but save all images:
     """
     Perform the entire reverse diffusion process.
     
@@ -1162,7 +1174,7 @@ def p_sample_loop(model, shape, labels=None): # Algorithm 2 but save all images:
     return [img.cpu()]#.numpy()]#imgs
 
 @torch.no_grad()
-def sample(model, image_width, image_height, batch_size=16, channels=3, labels=None):
+def sample(model, image_width, image_height, batch_size=16, channels=3, labels=None, timesteps=0):
     """
     Generate a batch of images by performing reverse diffusion.
     
@@ -1176,7 +1188,7 @@ def sample(model, image_width, image_height, batch_size=16, channels=3, labels=N
         A list of generated images at each timestep.
     """
     
-    return p_sample_loop(model, shape=(batch_size, channels, image_height, image_width), labels=labels)
+    return p_sample_loop(model, shape=(batch_size, channels, image_height, image_width), labels=labels, timesteps=timesteps)
 
 
 
@@ -1204,244 +1216,58 @@ def p_losses(denoise_model, x_start, t, labels = None, noise=None, loss_type="l1
     return loss
 
 
-if __name__ == '__main__':
 
+import torch
+import torchlibrosa
+from torchlibrosa.augmentation import SpecAugmentation
 
-
-    # Hyperparameters
-
-    epochs = 20 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
-    timesteps = 1000 # 1000
-
-
-
-    # Constants
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # target_seconds = 5 should be (128, 216)
-    image_size = 128  # Number of mel bands
-    image_width = 216 # number of time windows
-    channels = 1 # Single-channel for mel-spectrograms
-    batch_size = 4 #8#32#128
-    dim_mults = (1, 2, 4,) #8,) #(1, 2, 4,)
-    num_classes = 10
-
-    torch.manual_seed(0)# use seed for reproducability
-    sample_rate = 22050 # All files in the  dataset should have this sample_rate
-
-    # define beta schedule (a bad beta schedule that contains too much noise too early may make the model learn to produce blank mel-spectrograms)
-    betas = linear_beta_schedule(timesteps=timesteps, beta_start=0.0001, beta_end=0.0004) # cosine_beta_schedule(timesteps=timesteps, s=0.0001)
-
-    # define alphas
-    alphas = 1. - betas
-    alphas_cumprod = torch.cumprod(alphas, axis=0)
-    alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
-    sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
-
-    # calculations for diffusion q(x_t | x_{t-1}) and others
-    sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
-    sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
-
-    # calculations for posterior q(x_{t-1} | x_t, x_0)
-    posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
-
-
-
-
-
-
-
-    # Model Setup
-
-    # Setup pre-processing
-    # Done within the dataset itself
-
-    # Import dataset and setup dataloader
-    dataset = GTZANDataset(root_dir="GTZAN_Genre_Collection/genres", cache_dir="GTZAN_Genre_Collection/cached_mel_spectrograms", db_cache_path="GTZAN_Genre_Collection/cached_mel_spectrograms_db", target_seconds=5)#, transform=transform) # 13 seconds since this produces a round width on the mel-spectrograms that can be split many times
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, prefetch_factor=2) # TODO: Augment the dataset
-
-    print("Saving mel spectrograms")
-
-    dataset.save_mel_spectrograms()
-
-    print("Done")
-
-
-    # Example: Make sure everything is setup correctly before continuing
-
-    # Print the first item's genre and shape of the waveform
-    print("Getting first item...")
-    first_item = dataset[0]
-    print(f"Genre: {first_item['genre']}, Mel-Spectrogram shape: {first_item['mel_spectrogram'].shape}, Sample Rate: {first_item['sample_rate']}")
-
-    # Display the forward diffusion process for the mel-spectrogram
-    plot([get_noisy_spectrogram(first_item['mel_spectrogram'], torch.tensor([t])) for t in [0, timesteps // 5, 2*timesteps//5, 3*timesteps//5, 4*timesteps//5, timesteps-1]])#[0, 50, 100, 150, 199]])
-
-    plt.show()
-
-    # Display the original mel-spectogram to compare
-    plot_mel_spectrogram(first_item['mel_spectrogram'], first_item['sample_rate'])
-    #plot_mel_spectrogram(create_mel_spectogram_from_waveform(first_item['waveform'], first_item['sample_rate']), first_item['sample_rate'])
-
-    
-    # De-normalise the mel-spectrogram
-    mel_spectrogram_db = first_item['mel_spectrogram']# db scale, normalised mel-spectrogram
-    mel_spectrogram_db = min_max_denormalize(mel_spectrogram_db).numpy().astype(np.float32)# must be numpy array to convert back to power scale
-    
-    # Convert mel-spectrogram back to power scale
-    mel_spectrogram_power = librosa.db_to_power(mel_spectrogram_db, ref=1.0)
-    
-    # Play the audio reconstructed from the mel-spectrogram
-    reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
-    play_audio_from_waveform(normalize_audio(reconstruction), sample_rate)
-
-
-    # Test retrieving a batch from the dataset
-    batch = next(iter(dataloader))
-    #print("BATCH: ", batch) # [0] is images, [1] is labels
-    print(batch.keys())
-    #print("Labels from this batch: ", batch[1])#batch["label"])
-
-
-    # Process mel-spectrograms from the batch back into audio
-    # # for i, mel_spectrogram in enumerate(batch['mel_spectrogram']):
-
-    # #     # De-normalise the mel-spectrogram
-    # #     mel_spectrogram_db = min_max_denormalize(mel_spectrogram).numpy().astype(np.float32)# must be numpy array to convert back to power scale
+# # # Define a simple convolutional model from PANNs
+# # class PANNs_CNN14(torch.nn.Module):
+# #     def __init__(self):
+# #         super(PANNs_CNN14, self).__init__()
+# #         # Using a simple model from PANNs for demonstration
+# #         self.model = torch.hub.load('qiuqiangkong/panns_train', 'Cnn14', pretrained=True)
         
-    # #     # Convert mel-spectrogram back to power scale
-    # #     mel_spectrogram_power = librosa.db_to_power(mel_spectrogram_db, ref=1.0)
-        
-    # #     # Play the audio reconstructed from the mel-spectrogram
-    # #     reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
-    # #     play_audio_from_waveform(normalize_audio(reconstruction), batch['sample_rate'][i].item())
+# #     def forward(self, x):
+# #         # Extract features
+# #         x = self.model(x)
+# #         return x['embedding']
 
-    # #     # Compare to the original waveform
-    # #     #waveform = batch['waveform'][i].numpy().squeeze()
-    # #     #play_audio_from_waveform(waveform, batch['sample_rate'][i].item())
+def extract_features(audio_embedding_model, mel_spectrograms):
+    """Extract features from mel-spectrograms using PANNs model"""
+    features = []
+    for mel in mel_spectrograms:
+        mel = mel.unsqueeze(0)  # Add batch dimension
+        with torch.inference_mode():
+            feature = audio_embedding_model(mel)
+        features.append(feature.numpy())
+    return np.array(features)
 
+def calculate_fad(real_features, generated_features):
+    """Calculate Frechet Audio Distance (FAD)"""
+    mu_real = np.mean(real_features, axis=0)
+    sigma_real = np.cov(real_features, rowvar=False)
+    mu_generated = np.mean(generated_features, axis=0)
+    sigma_generated = np.cov(generated_features, rowvar=False)
 
+    diff = mu_real - mu_generated
+    covmean = sqrtm(sigma_real.dot(sigma_generated))
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
 
-    # Load model
-    model = ClassConditionalUnet(
-    dim=image_size,
-    channels=channels,
-    out_dim=channels,
-    dim_mults=dim_mults, #(1, 2, 4,),
-    num_classes=num_classes#len(dataset.caption_to_class)
-    #init_dim=1+
-    )
-    model.to(device)
-
-    # Define the optimizer for training the model.
-    # - model.parameters(): Parameters of the U-Net model to optimize.
-    # - lr=1e-3: Learning rate for the optimizer.
-    optimizer = Adam(model.parameters(), lr=1e-5)#, weight_decay=1e-5) # Weight decay is L2 regularisation (a term added to the loss function being optimised)
-
-
-    # Learning rate scheduler
-    num_steps_per_epoch = len(dataloader)
-    total_training_steps = num_steps_per_epoch * epochs
-    warmup_ratio = 0.1 # 10% of total training steps
-    warmup_steps = int(total_training_steps * warmup_ratio)
-
-    # Learning rate scheduler
-    #lr_scheduler = get_cosine_schedule_with_warmup( # Used to vary the learning rate at each step to better tune the training process
-    #    optimizer=optimizer,
-    #    num_warmup_steps=warmup_steps,
-    #    num_training_steps=total_training_steps,
-    #)
+    fad = np.sum(diff**2) + np.trace(sigma_real + sigma_generated - 2 * covmean)
+    return fad
 
 
 
-    # Model Training
+# Saving models and samples
 
-    # Set the model to train mode (Ensures layers such as dropout and batch normalisation work correctly)
-    model.train()
-
-    all_losses = []
-
-    for epoch in range(epochs):
-        #for step, batch in enumerate(dataloader):
-        running_loss = 0.0
-        for step, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", total=len(dataloader))):
-            optimizer.zero_grad()
-
-            #batch_size = batch[0].shape[0]
-            #batch_pixels = batch[0].to(device)
-
-            # Get batch size and move data to device
-            batch_size = batch['mel_spectrogram'].shape[0]
-            batch_mels = batch['mel_spectrogram'].to(device)
-
-            # Add a channel dimension to mel-spectrograms: [batch_size, 1, 128, 1292]
-            if batch_mels.dim() == 3:
-                batch_mels = batch_mels.unsqueeze(1) # The un-processed mel-spectrograms have shape [batch_size, 128, 1292], without an explicit channel dimension used within images
-
-
-            #batch_labels = torch.tensor(batch['genre'], dtype=torch.long).to(device) # Sample t uniformly for every example in the batch
-            batch_labels = batch['genre'].to(device) # Add labels to the training batch
-
-            #print("Batch keys: ", batch.keys())
-            #print("Labels: ", batch_labels.shape)
-
-            #batch_labels = batch[1].to(device) # Add labels to the training batch
-
-            # Algorithm 1 line 3: sample t uniformally for every example in the batch
-            t = torch.randint(0, timesteps, (batch_size,), device=device).long()
-
-            loss = p_losses(model, batch_mels, t, batch_labels, loss_type="huber")
-
-            all_losses.append(loss.item()) # Append loss to the list
-            running_loss+=loss.item()
-
-            #if step % 100 == 0:
-            #    print("Loss:", loss.item())
-
-            loss.backward()
-
-            # Clip the calculated gradients to prevent the exploding gradients problem
-            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-            optimizer.step()
-
-            #lr_scheduler.step()
-
-        print("Average loss for epoch: ", epoch + 1, " = ", running_loss / len(dataloader))
-
-
-    # Plotting the loss
-    plt.figure(figsize=(10, 5))
-    plt.plot(all_losses, label='Loss')
-    plt.xlabel('Batch number')
-    plt.ylabel('Loss')
-    plt.title('Training Loss Over Time')
-    plt.legend()
-    plt.show()
-
-
-
-    # Sample new audio using the trained model
-
-    model.eval()
-
-    # Generate labels, 10 of each class
-    class_indices = []
-    for i in range(10):
-        class_indices.extend([i] * 1)
-
-    # Convert the list to a tensor
-    labels = torch.tensor(class_indices, device=device)
-
-    # Check the labels
-    print(labels)
-
-
+def save_model(model, run_name="Audio class conditioned", epochs=0, upload_model=True):
+    """Save locally, then upload to Weights and Biases as an artifact"""
 
     # Setup directory to store the model parameters
     filepath = "Saved Models"
-    filename = f'Audio class conditioned_{epochs}_epochs.pth'
+    filename = f'{run_name}_{epochs}_epochs.pth'
 
     # Create the directory if it doesn't exist
     os.makedirs(filepath, exist_ok=True)
@@ -1450,9 +1276,19 @@ if __name__ == '__main__':
     # Save the model state
     torch.save(model.state_dict(), fullpath)
 
-    print("Model saved!")
+    print("Model saved locally!")
 
+    if upload_model:
+        # Upload artifact to Weights and Biases
+        at = wandb.Artifact("model", type="model", description="Class Conditioned Audio Diffusion Model.", metadata={"epoch": epochs})
+        #at.add_dir(os.path.join("models", run_name))
+        at.add_file(fullpath)
+        wandb.log_artifact(at)
 
+        print("Model uploaded!")
+
+def save_samples(mel_spectrograms, upload_artifacts=True, play_audio=False):
+    """Save locally, then upload to Weights and Biases as an artifact"""
 
     # Setup directory to store the generated audio mel-spectrograms
     folder1 = "Generated_Images"
@@ -1463,19 +1299,8 @@ if __name__ == '__main__':
     # Create the directory if it doesn't exist
     os.makedirs(folder, exist_ok=True)
 
-    # # # Load the model state
-
-    # # # Load the state dictionary into the model
-    # # model.load_state_dict(torch.load(fullpath))
-    # # model.eval() # Set the model to evaluation mode
-
-    # # print("Model loaded!")
-
-    # randomly generate 100 images
-    samples = sample(model, image_height=image_size, image_width=image_width, batch_size=10, channels=channels, labels=labels)# These samples will be un-normalised
-
-    mel_spectrograms = samples[0].squeeze(1)
-
+    upload_mel_spectrogram_files = []
+    upload_audio_files = []
 
     # Process mel-spectrograms from the batch back into audio
     for i in range(len(mel_spectrograms)):
@@ -1488,7 +1313,8 @@ if __name__ == '__main__':
         # Plot the mel-spectrogram and save it
         output_file = os.path.join(folder, f'output_audio_{i}_{epochs}_epochs')
         output_mel_spectrogram = output_file + ".png"
-        plot_mel_spectrogram(mel_spectrogram_db, sample_rate, output_mel_spectrogram)
+        upload_mel_spectrogram_files.append(output_mel_spectrogram)
+        plot_mel_spectrogram(mel_spectrogram_db, sample_rate, display_plot=False, output_file=output_mel_spectrogram)
 
 
         # sanitise the output to remove invalid values and replace them with 0
@@ -1503,7 +1329,8 @@ if __name__ == '__main__':
         # Play the audio reconstructed from the mel-spectrogram
         reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
         reconstruction = normalize_audio(reconstruction)
-        play_audio_from_waveform(reconstruction, sample_rate)
+        if play_audio:
+            play_audio_from_waveform(reconstruction, sample_rate)
 
         # Compare to the original waveform
         #waveform = batch['waveform'][i].numpy().squeeze()
@@ -1512,8 +1339,367 @@ if __name__ == '__main__':
         # Save the new audio
         reconstruction = torch.tensor(reconstruction).unsqueeze(0) # Ensure the tensor is a 2D tensor to save
         output_audio_file = output_file + ".wav"
+        upload_audio_files.append(output_audio_file)
         torchaudio.save(output_audio_file, reconstruction, sample_rate)
         print(f'Saved reconstructed audio to {output_audio_file}')
+
+
+    if upload_artifacts:
+        # log mel-spectrograms to wandb
+        #wandb.log({f'{output_file}': wandb.Image(output_file)})
+        wandb.log({"sampled_mel_spectrograms":     [wandb.Image(output_file) for output_file in upload_mel_spectrogram_files]})
+
+        # log audio to wandb
+        wandb.log({"sampled_audio":     [wandb.Audio(output_file, sample_rate=sample_rate) for output_file in upload_audio_files]})
+
+        print("Samples uploaded!")
+
+
+
+if __name__ == '__main__':
+
+
+
+    # Hyperparameters
+
+    epochs = 20 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    timesteps = [10] # 1000
+    beta_starts = [0.0001] # Noise scheduler start
+    beta_ends = [0.0004] # Noise scheduler end
+    learning_rates = [1e-5, 1e-4, 1e-3]
+    dim_mults = [(1, 2, 4,) , (1, 2, 4,8,)] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
+    emb_dims = [5, 10] # num_classes // 2 # The number of (conditional / class / genre) dimensions that are appended to the input image
+
+
+
+    # Constants
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # target_seconds = 5 should be (128, 216)
+    image_size = 128  # Number of mel bands
+    image_width = 216 # number of time windows
+    channels = 1 # Single-channel for mel-spectrograms
+    batch_size = 4 #8#32#128
+    
+    num_classes = 10
+
+    torch.manual_seed(0) # use seed for reproducability
+    sample_rate = 22050 # All files in the  dataset should have this sample_rate
+
+    target_seconds=5 # Length of the mel-spectrograms to be generated and used as input to the model
+
+    # Calculate total number of runs
+    total_runs = len(list(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims)))
+
+    # Perform multiple runs sequencially
+    for i, (timestep, beta_start, beta_end, learning_rate, architecture, emb_dim) in enumerate(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims)):
+        print(f"Preparing to run {i+1}/{total_runs} with parameters: timestep={timestep}, beta_start={beta_start}, beta_end={beta_end}, learning_rate={learning_rate}, architecture={architecture}, emb_dim={emb_dim}")
+
+
+        # define beta schedule (a bad beta schedule that contains too much noise too early may make the model learn to produce blank mel-spectrograms)
+        betas = linear_beta_schedule(timesteps=timestep, beta_start=beta_start, beta_end=beta_end) # cosine_beta_schedule(timesteps=timesteps, s=0.0001)
+
+        # define alphas
+        alphas = 1. - betas
+        alphas_cumprod = torch.cumprod(alphas, axis=0)
+        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+        sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+        sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+
+        # Get current date and time
+        now = datetime.now()
+
+        # Format time as hh:mm:ss
+        time_str = now.strftime("%H_%M_%S")
+
+        # Format date as dd/mm/yyyy
+        date_str = now.strftime("%d_%m_%Y")
+
+        print("Current Time:", time_str)
+        print("Current Date:", date_str)
+
+
+        run_name = f'{date_str}_{time_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_learning_rate_{len(dim_mults)}_layers_{emb_dim}_emb_dim'
+
+        # start a new wandb run to track this script
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="Final-Year_university-Project",
+
+            # Set the name of the run
+            name = run_name,
+
+            # track hyperparameters and run metadata
+            config={
+            "epochs": epochs,
+            "timesteps": timestep,
+            "beta_start": beta_start,
+            "beta_end": beta_end,
+            "learning_rate": learning_rate,
+            "architecture": "CNN",
+            "number_of_layers": len(dim_mults),
+            "dataset": "GTZAN",
+            }
+        )
+
+
+
+        # Model Setup
+
+        # Setup pre-processing
+        # Done within the dataset itself
+
+        # Import dataset and setup dataloader
+        dataset = GTZANDataset(root_dir="GTZAN_Genre_Collection/genres", cache_dir="GTZAN_Genre_Collection/cached_mel_spectrograms", db_cache_path="GTZAN_Genre_Collection/cached_mel_spectrograms_db", target_seconds=target_seconds)#, transform=transform) # 5 seconds since this produces a round width on the mel-spectrograms that can be split many times
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, prefetch_factor=2) # TODO: Augment the dataset
+
+        # Save mel-spectrograms to disk if they are not present
+        print("Saving mel spectrograms")
+
+        dataset.save_mel_spectrograms()
+
+        print("Done.")
+
+
+        # Example: Make sure everything is setup correctly before continuing
+
+        # # # TODO: Make a test that will compare the audio similarity between the reconstructed audio and the original waveform
+
+        # # # Print the first item's genre and shape of the waveform
+        # # print("Getting first item...")
+        # # first_item = dataset[0]
+        # # print(f"Genre: {first_item['genre']}, Mel-Spectrogram shape: {first_item['mel_spectrogram'].shape}, Sample Rate: {first_item['sample_rate']}")
+
+        # # # Display the forward diffusion process for the mel-spectrogram
+        # TODO: upload an example of the forward and reverse diffusion process (after training) to weights and biases
+        # # plot([get_noisy_spectrogram(first_item['mel_spectrogram'], torch.tensor([t])) for t in [0, timesteps // 5, 2*timesteps//5, 3*timesteps//5, 4*timesteps//5, timesteps-1]])#[0, 50, 100, 150, 199]])
+
+        # # plt.show()
+
+        # # # Display the original mel-spectogram to compare
+        # # plot_mel_spectrogram(first_item['mel_spectrogram'], first_item['sample_rate'])
+        # # #plot_mel_spectrogram(create_mel_spectogram_from_waveform(first_item['waveform'], first_item['sample_rate']), first_item['sample_rate'])
+
+        
+        # # # De-normalise the mel-spectrogram
+        # # mel_spectrogram_db = first_item['mel_spectrogram']# db scale, normalised mel-spectrogram
+        # # mel_spectrogram_db = min_max_denormalize(mel_spectrogram_db).numpy().astype(np.float32)# must be numpy array to convert back to power scale
+        
+        # # # Convert mel-spectrogram back to power scale
+        # # mel_spectrogram_power = librosa.db_to_power(mel_spectrogram_db, ref=1.0)
+        
+        # # # Play the audio reconstructed from the mel-spectrogram
+        # # reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
+        # # play_audio_from_waveform(normalize_audio(reconstruction), sample_rate)
+
+
+        # # # Test retrieving a batch from the dataset
+        # # batch = next(iter(dataloader))
+        # # #print("BATCH: ", batch) # [0] is images, [1] is labels
+        # # print(batch.keys())
+        # # #print("Labels from this batch: ", batch[1])#batch["label"])
+
+
+        # Process mel-spectrograms from the batch back into audio
+        # # for i, mel_spectrogram in enumerate(batch['mel_spectrogram']):
+
+        # #     # De-normalise the mel-spectrogram
+        # #     mel_spectrogram_db = min_max_denormalize(mel_spectrogram).numpy().astype(np.float32)# must be numpy array to convert back to power scale
+            
+        # #     # Convert mel-spectrogram back to power scale
+        # #     mel_spectrogram_power = librosa.db_to_power(mel_spectrogram_db, ref=1.0)
+            
+        # #     # Play the audio reconstructed from the mel-spectrogram
+        # #     reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
+        # #     play_audio_from_waveform(normalize_audio(reconstruction), batch['sample_rate'][i].item())
+
+        # #     # Compare to the original waveform
+        # #     #waveform = batch['waveform'][i].numpy().squeeze()
+        # #     #play_audio_from_waveform(waveform, batch['sample_rate'][i].item())
+
+
+
+        # Load model
+        model = ClassConditionalUnet(
+        dim=image_size,
+        channels=channels,
+        out_dim=channels,
+        dim_mults=architecture, #(1, 2, 4,),
+        num_classes=num_classes,#len(dataset.caption_to_class)
+        emb_dim=emb_dim # num_classes // 2
+        #init_dim=1+
+        )
+        model.to(device)
+
+        # Define the optimizer for training the model.
+        # - model.parameters(): Parameters of the U-Net model to optimize.
+        # - lr=1e-3: Learning rate for the optimizer.
+        optimizer = Adam(model.parameters(), lr=learning_rate)#, weight_decay=1e-5) # Weight decay is L2 regularisation (a term added to the loss function being optimised)
+
+
+        # Learning rate scheduler
+        # # num_steps_per_epoch = len(dataloader)
+        # # total_training_steps = num_steps_per_epoch * epochs
+        # # warmup_ratio = 0.1 # 10% of total training steps
+        # # warmup_steps = int(total_training_steps * warmup_ratio)
+
+        # Learning rate scheduler
+        # #lr_scheduler = get_cosine_schedule_with_warmup( # Used to vary the learning rate at each step to better tune the training process
+        # #    optimizer=optimizer,
+        # #    num_warmup_steps=warmup_steps,
+        # #    num_training_steps=total_training_steps,
+        # #)
+
+        # # import tensorflow_hub as hub
+
+        # Load pre-trained audio embedding model
+        #audio_embedding_model = hub.load('https://tfhub.dev/google/vggish/1')#inception_v3(pretrained=True) # has default size of 96x64, which does not match the mel-spectrograms for this project
+        #audio_embedding_model.eval()
+        # Load the pre-trained PANNs model
+        #audio_embedding_model = PANNs_CNN14()
+        #audio_embedding_model.eval()
+
+        # # # Load real and generated mel-spectrograms
+        # # real_mels = batch = next(iter(dataloader))  # Replace with your real mel-spectrograms
+        # # labels = batch['genre']#.to(device)
+        # # generated_mels = sample(model, image_height=image_size, image_width=image_width, batch_size=batch_size, channels=channels, labels=labels)  # Replace with your generated mel-spectrograms
+
+        # # # Extract features
+        # # real_features = extract_features(real_mels)
+        # # generated_features = extract_features(generated_mels)
+
+        # # # Calculate FAD
+        # # fad_score = calculate_fad(real_features, generated_features)
+        # # print(f'Frechet Audio Distance (FAD): {fad_score}')
+
+
+
+        # Model Training
+
+        # Set the model to train mode (Ensures layers such as dropout and batch normalisation work correctly)
+        model.train()
+
+        #all_losses = []
+
+        for epoch in range(epochs):
+            #for step, batch in enumerate(dataloader):
+            running_loss = 0.0
+            for step, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", total=len(dataloader))):
+                optimizer.zero_grad()
+
+                # Get batch size and move data to device
+                batch_size = batch['mel_spectrogram'].shape[0]
+                batch_mels = batch['mel_spectrogram'].to(device)
+
+                # Add a channel dimension to mel-spectrograms: [batch_size, 1, 128, 1292]
+                if batch_mels.dim() == 3:
+                    batch_mels = batch_mels.unsqueeze(1) # The un-processed mel-spectrograms have shape [batch_size, 128, 1292], without an explicit channel dimension used within images
+
+
+                #batch_labels = torch.tensor(batch['genre'], dtype=torch.long).to(device) # Sample t uniformly for every example in the batch
+                batch_labels = batch['genre'].to(device) # Add labels to the training batch
+
+                #print("Batch keys: ", batch.keys())
+                #print("Labels: ", batch_labels.shape)
+
+                #batch_labels = batch[1].to(device) # Add labels to the training batch
+
+                # Algorithm 1 line 3: sample t uniformally for every example in the batch
+                t = torch.randint(0, timestep, (batch_size,), device=device).long()
+
+                loss = p_losses(model, batch_mels, t, batch_labels, loss_type="huber")
+
+                # Log the loss from the batch
+                #all_losses.append(loss.item()) # Append loss to the list
+                running_loss+=loss.item()
+                
+                # log metrics to wandb
+                wandb.log({"loss": loss})
+
+                # Update the model weights and optimiser
+                loss.backward()
+
+                # Clip the calculated gradients to prevent the exploding gradients problem
+                #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+                optimizer.step()
+
+                #lr_scheduler.step()
+
+            print("Average loss for epoch: ", epoch + 1, " = ", running_loss / len(dataloader))
+
+            # Load real and generated mel-spectrograms
+            #real_mels = batch = next(iter(dataloader))  # Replace with your real mel-spectrograms
+            #labels = batch['genre']#.to(device)
+            #generated_mels = sample(model, image_height=image_size, image_width=image_width, batch_size=batch_size, channels=channels, labels=batch_labels)  # Replace with your generated mel-spectrograms
+            #generated_mel_spectrograms = generated_mels[0].squeeze(1)
+
+
+            # Extract features
+            #real_features = extract_features(audio_embedding_model, batch['mel_spectrogram'])
+            #generated_features = extract_features(audio_embedding_model, generated_mel_spectrograms)
+
+            # Calculate FAD
+            #fad_score = calculate_fad(real_features, generated_features)
+            #print(f'Frechet Audio Distance (FAD): {fad_score}')
+
+            # log metrics to wandb
+            #wandb.log({"fad": fad_score})
+
+
+        # # # Plotting the loss
+        # # plt.figure(figsize=(10, 5))
+        # # plt.plot(all_losses, label='Loss')
+        # # plt.xlabel('Batch number')
+        # # plt.ylabel('Loss')
+        # # plt.title('Training Loss Over Time')
+        # # plt.legend()
+        # # plt.show()
+
+
+
+        # Sample new audio using the trained model
+
+        model.eval()
+
+        # Generate labels, 10 of each class
+        class_indices = []
+        for i in range(10):
+            class_indices.extend([i] * 1)
+
+        # Convert the list to a tensor
+        labels = torch.tensor(class_indices, device=device)
+
+        # Check the labels
+        print(labels)
+
+        # Save the trained model weights
+        save_model(model, run_name=run_name, epochs=epochs)
+
+        # # # Load the model state
+
+        # # # Load the state dictionary into the model
+        # # model.load_state_dict(torch.load(fullpath))
+        # # model.eval() # Set the model to evaluation mode
+
+        # # print("Model loaded!")
+
+        # randomly generate 10 mel_spectrograms
+        samples = sample(model, image_height=image_size, image_width=image_width, batch_size=10, channels=channels, labels=labels, timesteps=timestep)# These samples will be un-normalised
+
+        mel_spectrograms = samples[0].squeeze(1)
+
+        save_samples(mel_spectrograms)
+
+        # [optional] finish the wandb run, necessary in notebooks
+        wandb.finish()
 
 
     # Old code
@@ -1631,3 +1817,60 @@ if __name__ == '__main__':
     # #     # Compare to the original waveform
     # #     waveform = batch['waveform'][i].numpy().squeeze()
     # #     play_audio_from_waveform(waveform, batch['sample_rate'][i].item())
+
+
+    # # def extract_features(audio_embedding_model, mel_spectrograms):
+# #     """Function to extract features from mel-spectrograms using an audio embedding model. Input mel-spectrograms should be tensors."""
+# #     features = []
+# #     for mel in mel_spectrograms:
+# #         with torch.inference_mode():
+# #             feature = audio_embedding_model(mel.unsqueeze(0))
+# #         features.append(feature.detach().numpy())
+# #     return np.array(features)
+
+# # def calculate_fad(real_features, generated_features):
+# #     """Function to calculate Frechet Audio Distance (FAD). Input features should be numpy arrays."""
+# #     mu_real = np.mean(real_features, axis=0)
+# #     sigma_real = np.cov(real_features, rowvar=False)
+# #     mu_generated = np.mean(generated_features, axis=0)
+# #     sigma_generated = np.cov(generated_features, rowvar=False)
+
+# #     diff = mu_real - mu_generated
+# #     covmean = sqrtm(sigma_real.dot(sigma_generated))
+# #     if np.iscomplexobj(covmean):
+# #         covmean = covmean.real
+
+# #     fad = np.sum(diff**2) + np.trace(sigma_real + sigma_generated - 2 * covmean)
+# #     return fad
+
+# # def preprocess_mel_spectrogram_for_audio_embeddings(mel):
+# #     """Preprocess the mel-spectrogram for VGGish"""
+# #     mel_log = torch.log(mel + 1e-6)  # Convert to log scale
+# #     mel_log = mel_log.unsqueeze(0).repeat(3, 1, 1)  # Repeat the channel 3 times
+# #     mel_log = torch.nn.functional.interpolate(mel_log.unsqueeze(0), size=(128, 216), mode='bilinear')
+# #     return mel_log
+
+# # def extract_features(audio_embedding_model, mel_spectrograms):
+# #     """Extract features from mel-spectrograms using VGGish"""
+# #     features = []
+# #     for mel in mel_spectrograms:
+# #         mel_log = preprocess_mel_spectrogram_for_audio_embeddings(mel)
+# #         with torch.inference_mode():
+# #             feature = audio_embedding_model(mel_log)
+# #         features.append(feature.numpy())
+# #     return np.array(features)
+
+# # def calculate_fad(real_features, generated_features):
+# #     """Calculate Frechet Audio Distance (FAD)"""
+# #     mu_real = np.mean(real_features, axis=0)
+# #     sigma_real = np.cov(real_features, rowvar=False)
+# #     mu_generated = np.mean(generated_features, axis=0)
+# #     sigma_generated = np.cov(generated_features, rowvar=False)
+
+# #     diff = mu_real - mu_generated
+# #     covmean = sqrtm(sigma_real.dot(sigma_generated))
+# #     if np.iscomplexobj(covmean):
+# #         covmean = covmean.real
+
+# #     fad = np.sum(diff**2) + np.trace(sigma_real + sigma_generated - 2 * covmean)
+# #     return fad
