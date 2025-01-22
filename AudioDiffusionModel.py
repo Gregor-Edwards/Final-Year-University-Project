@@ -85,7 +85,7 @@ class GTZANDataset(Dataset):
         self.cache_dir = cache_dir # directory to store mel-spectrograms of the audio files (Done to reduce loading times)
         self.cache_dir_db = db_cache_path # directory to store mel-spectrograms of the audio files in the DB scale (Done to reduce loading times)
         self.transform = transform 
-        self.genres = os.listdir(root_dir)
+        self.genres = [os.listdir(root_dir)[0]] #Testing only 1 genre (blues) os.listdir(root_dir)
         self.files = []
         self.sample_rate = sample_rate
         self.n_mels = n_mels
@@ -93,6 +93,7 @@ class GTZANDataset(Dataset):
         self.target_length = sample_rate * target_seconds
 
         # Add each file to the dataset
+        print("GENRES: ", self.genres)
         for genre in self.genres:
             genre_dir = os.path.join(root_dir, genre)
             if os.path.isdir(genre_dir):
@@ -1165,13 +1166,19 @@ def p_sample_loop(model, shape, labels=None, timesteps=0): # Algorithm 2 but sav
     # start from pure noise (for each example in the batch)
     img = torch.randn(shape, device=device)# Just random gaussian noise
     #img = torch.rand(shape, device=device) # Uniform noise in the range [0, 1]
-    #imgs = [] # to store images at each timestep for visualization or analysis.
+    imgs = [] # to store images at each timestep for visualization or analysis.
 
     # Iterate over timesteps in reverse (from T to 0).
     for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=timesteps):
         img = p_sample(model, img, torch.full((b,), i, device=device, dtype=torch.long), i, labels)
         #imgs.append(img.cpu().numpy()) # Store the current image (move to CPU for storage).
-    return [img.cpu()]#.numpy()]#imgs
+        
+        # Save image at each 1/5 of the timesteps
+        if i % (timesteps // 5) == 0:
+            imgs.append(img.cpu())#.numpy())
+
+    #print("LENGTH: ", len(imgs))
+    return imgs#[img.cpu()]#.numpy()]
 
 @torch.no_grad()
 def sample(model, image_width, image_height, batch_size=16, channels=3, labels=None, timesteps=0):
@@ -1319,46 +1326,52 @@ def save_samples(mel_spectrograms, upload_artifacts=True, play_audio=False):
     upload_mel_spectrogram_files = []
     upload_audio_files = []
 
+    #print("Number of samples: ", len(mel_spectrograms))
+
+
     # Process mel-spectrograms from the batch back into audio
-    for i in range(len(mel_spectrograms)):
+    for sample_idx, sample in enumerate(mel_spectrograms): 
+        for i, mel_spectrogram_db in enumerate(sample): # Each sample is a list of mel-spectrograms
+            #print("Sample: ", sample_idx, f"{i}_from_5_timesteps")
+            #print(mel_spectrogram_db, mel_spectrogram_db.shape)
 
-        mel_spectrogram_db = mel_spectrograms[i] # In the db scale
+            #mel_spectrogram_db = sample[i] # In the db scale
 
-        # Normalize the mel-spectrogram
-        mel_spectrogram_db = min_max_normalize(mel_spectrogram_db)
+            # Normalize the mel-spectrogram
+            mel_spectrogram_db = min_max_normalize(mel_spectrogram_db)
 
-        # Plot the mel-spectrogram and save it
-        output_file = os.path.join(folder, f'output_audio_{i}_{epochs}_epochs')
-        output_mel_spectrogram = output_file + ".png"
-        upload_mel_spectrogram_files.append(output_mel_spectrogram)
-        plot_mel_spectrogram(mel_spectrogram_db, sample_rate, display_plot=False, output_file=output_mel_spectrogram)
+            # Plot the mel-spectrogram and save it
+            output_file = os.path.join(folder, f'output_audio_{sample_idx}_{i}_from_5_timesteps_{epochs}_epochs')
+            output_mel_spectrogram = output_file + ".png"
+            upload_mel_spectrogram_files.append(output_mel_spectrogram)
+            plot_mel_spectrogram(mel_spectrogram_db, sample_rate, display_plot=False, output_file=output_mel_spectrogram)
 
 
-        # sanitise the output to remove invalid values and replace them with 0
-        #mel_spectrogram = np.nan_to_num(mel_spectrogram, nan=0.0, posinf=0.0, neginf=0.0)
+            # sanitise the output to remove invalid values and replace them with 0
+            #mel_spectrogram = np.nan_to_num(mel_spectrogram, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # De-normalise the mel-spectrogram
-        mel_spectrogram_db = min_max_denormalize(mel_spectrogram_db).numpy().astype(np.float32)# must be numpy array to convert back to power scale
-        
-        # Convert mel-spectrogram back to power scale
-        mel_spectrogram_power = librosa.db_to_power(mel_spectrogram_db, ref=1.0)
-        
-        # Play the audio reconstructed from the mel-spectrogram
-        reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
-        reconstruction = normalize_audio(reconstruction)
-        if play_audio:
-            play_audio_from_waveform(reconstruction, sample_rate)
+            # De-normalise the mel-spectrogram
+            mel_spectrogram_db = min_max_denormalize(mel_spectrogram_db).numpy().astype(np.float32)# must be numpy array to convert back to power scale
+            
+            # Convert mel-spectrogram back to power scale
+            mel_spectrogram_power = librosa.db_to_power(mel_spectrogram_db, ref=1.0)
+            
+            # Play the audio reconstructed from the mel-spectrogram
+            reconstruction = reconstruct_waveform_from_mel_spectogram(mel_spectrogram_power, sample_rate)
+            reconstruction = normalize_audio(reconstruction)
+            if play_audio:
+                play_audio_from_waveform(reconstruction, sample_rate)
 
-        # Compare to the original waveform
-        #waveform = batch['waveform'][i].numpy().squeeze()
-        #play_audio_from_waveform(waveform, batch['sample_rate'][i].item())
+            # Compare to the original waveform
+            #waveform = batch['waveform'][i].numpy().squeeze()
+            #play_audio_from_waveform(waveform, batch['sample_rate'][i].item())
 
-        # Save the new audio
-        reconstruction = torch.tensor(reconstruction).unsqueeze(0) # Ensure the tensor is a 2D tensor to save
-        output_audio_file = output_file + ".wav"
-        upload_audio_files.append(output_audio_file)
-        torchaudio.save(output_audio_file, reconstruction, sample_rate)
-        print(f'Saved reconstructed audio to {output_audio_file}')
+            # Save the new audio
+            reconstruction = torch.tensor(reconstruction).unsqueeze(0) # Ensure the tensor is a 2D tensor to save
+            output_audio_file = output_file + ".wav"
+            upload_audio_files.append(output_audio_file)
+            torchaudio.save(output_audio_file, reconstruction, sample_rate)
+            print(f'Saved reconstructed audio to {output_audio_file}')
 
 
     if upload_artifacts:
@@ -1377,20 +1390,21 @@ if __name__ == '__main__':
 
 
 
-    # Hyperparameters
+    # # # Hyperparameters
 
-    epochs = 20 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
-    timesteps = [1000] # 1000
-    beta_starts = [0.0001] # Noise scheduler start
+    epochs = 2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    timesteps = [4000] # 1000
+    beta_starts = [0.00001] # Noise scheduler start
     beta_ends = [0.0004] # Noise scheduler end
-    learning_rates = [1e-5, 1e-4, 1e-3]
-    dim_mults = [(1, 2, 4,) , (1, 2, 4, 8,)] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
-    emb_dims = [5, 10] # num_classes // 2 # The number of (conditional / class / genre) dimensions that are appended to the input image
-    loss_type=["huber"]
+    learning_rates = [1e-4]#, 1e-3] # 1e-5, too low with a learning rate scheduler, 1e-3 too high
+    warmup = 0.0
+    dim_mults = [(1, 2, 4,)]# , (1, 2, 4, 8,) makes no noticable improvement] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
+    emb_dims = [1] # Cannot be set to 0 for no class conditioning#5]#, 10 makes no noticable improvement] # num_classes // 2 # The number of (conditional / class / genre) dimensions that are appended to the input image
+    loss_type=["huber"] #["l1", "l2"]
 
 
     # TODO: Test different loss types, optimisers, learning rate schedules, noise schedules, weight initialisation techniques
-    # Next step: learning rate scheduler
+    # Next step: learning rate scheduler, perhaps try just one genre of music, get overleaf for writeup
 
     # Constants
 
@@ -1446,7 +1460,7 @@ if __name__ == '__main__':
         print("Current Date:", date_str)
 
 
-        run_name = f'Run_{i+1}_Date_{date_str}_Time_{time_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_learning_rate_{len(architecture)}_layers_{emb_dim}_emb_dim_{loss_type}_loss'
+        run_name = f'Run_{i+1}_Date_{date_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_lr_{len(architecture)}_layers_{emb_dim}_emb_dim_{loss_type}_loss_blues_only' # MAKE SURE THIS NAME IS NOT TOO LONG!!!
 
         # start a new wandb run to track this script
         wandb.init(
@@ -1464,6 +1478,8 @@ if __name__ == '__main__':
             "beta_start": beta_start,
             "beta_end": beta_end,
             "learning_rate": learning_rate,
+            "learning_rate_scheduler": True,
+            "learning_rate_warmup": {warmup},
             "architecture": "CNN",
             "number_of_layers": len(architecture),
             "loss_type": loss_type,
@@ -1480,7 +1496,7 @@ if __name__ == '__main__':
 
         # Import dataset and setup dataloader
         dataset = GTZANDataset(root_dir="GTZAN_Genre_Collection/genres", cache_dir="GTZAN_Genre_Collection/cached_mel_spectrograms", db_cache_path="GTZAN_Genre_Collection/cached_mel_spectrograms_db", target_seconds=target_seconds)#, transform=transform) # 5 seconds since this produces a round width on the mel-spectrograms that can be split many times
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, prefetch_factor=2) # TODO: Augment the dataset
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True, prefetch_factor=2) # 2 workers if using large epochs TODO: Augment the dataset
 
         # Save mel-spectrograms to disk if they are not present
         print("Saving mel spectrograms")
@@ -1490,21 +1506,36 @@ if __name__ == '__main__':
         print("Done.")
 
 
+
         # Example: Make sure everything is setup correctly before continuing
 
-        # # # TODO: Make a test that will compare the audio similarity between the reconstructed audio and the original waveform
+        
 
-        # # # Print the first item's genre and shape of the waveform
-        # # print("Getting first item...")
-        # # first_item = dataset[0]
-        # # print(f"Genre: {first_item['genre']}, Mel-Spectrogram shape: {first_item['mel_spectrogram'].shape}, Sample Rate: {first_item['sample_rate']}")
+        # Print the first item's genre and shape of the waveform
+        print("Getting first item...")
+        first_item = dataset[0]
+        print(f"Genre: {first_item['genre']}, Mel-Spectrogram shape: {first_item['mel_spectrogram'].shape}, Sample Rate: {first_item['sample_rate']}")
 
         # # # Display the forward diffusion process for the mel-spectrogram
-        # TODO: upload an example of the forward and reverse diffusion process (after training) to weights and biases
-        # # plot([get_noisy_spectrogram(first_item['mel_spectrogram'], torch.tensor([t])) for t in [0, timesteps // 5, 2*timesteps//5, 3*timesteps//5, 4*timesteps//5, timesteps-1]])#[0, 50, 100, 150, 199]])
+        # TODO: upload an example of the reverse diffusion process (after training) to weights and biases
+        plot([get_noisy_spectrogram(first_item['mel_spectrogram'], torch.tensor([t])) for t in [0, timestep // 5, 2*timestep//5, 3*timestep//5, 4*timestep//5, timestep-1]])#[0, 50, 100, 150, 199]])
 
-        # # plt.show()
 
+        # Plot the mel-spectrograms and save them
+        folder1 = "Generated_Images"
+        folder2 = "Class_Conditioned_Audio"
+        folder = os.path.join(folder1, folder2)
+        output_file = os.path.join(folder, f'forward_diffusion_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_ends')
+        output_mel_spectrogram = output_file + ".png"
+        
+        plt.savefig(output_mel_spectrogram, bbox_inches='tight') # Should remove the white padding
+        print(f'Saved mel_spectrogram_db to {output_mel_spectrogram}')
+        plt.show() # The image must be saved before plotting to prevent the canvas from being cleared
+
+        # Upload the mel-spectrograms
+        wandb.log({"forward_diffusion": wandb.Image(output_mel_spectrogram)})
+        
+        # # # TODO: Make a test that will compare the audio similarity between the reconstructed audio and the original waveform
         # # # Display the original mel-spectogram to compare
         # # plot_mel_spectrogram(first_item['mel_spectrogram'], first_item['sample_rate'])
         # # #plot_mel_spectrogram(create_mel_spectogram_from_waveform(first_item['waveform'], first_item['sample_rate']), first_item['sample_rate'])
@@ -1567,17 +1598,17 @@ if __name__ == '__main__':
 
 
         # Learning rate scheduler
-        # # num_steps_per_epoch = len(dataloader)
-        # # total_training_steps = num_steps_per_epoch * epochs
-        # # warmup_ratio = 0.1 # 10% of total training steps
-        # # warmup_steps = int(total_training_steps * warmup_ratio)
+        num_steps_per_epoch = len(dataloader)
+        total_training_steps = num_steps_per_epoch * epochs
+        warmup_ratio = warmup#0.1 # 10% of total training steps
+        warmup_steps = int(total_training_steps * warmup_ratio)
 
         # Learning rate scheduler
-        # #lr_scheduler = get_cosine_schedule_with_warmup( # Used to vary the learning rate at each step to better tune the training process
-        # #    optimizer=optimizer,
-        # #    num_warmup_steps=warmup_steps,
-        # #    num_training_steps=total_training_steps,
-        # #)
+        lr_scheduler = get_cosine_schedule_with_warmup( # Used to vary the learning rate at each step to better tune the training process
+           optimizer=optimizer,
+           num_warmup_steps=warmup_steps,
+           num_training_steps=total_training_steps,
+        )
 
         # # import tensorflow_hub as hub
 
@@ -1644,6 +1675,7 @@ if __name__ == '__main__':
                 
                 # log metrics to wandb
                 wandb.log({f'{loss_type}_loss': loss})
+                wandb.log({f'learning_rate': lr_scheduler.get_last_lr()[0]})
 
                 # Update the model weights and optimiser
                 loss.backward()
@@ -1653,9 +1685,12 @@ if __name__ == '__main__':
 
                 optimizer.step()
 
+                # Uncomment for the learning rate scheduler to be active
                 #lr_scheduler.step()
 
-            print("Average loss for epoch: ", epoch + 1, " = ", running_loss / len(dataloader))
+            average_loss = running_loss / len(dataloader)
+            print("Average loss for epoch: ", epoch + 1, " = ", average_loss)
+            wandb.log({f'average_{loss_type}_loss': average_loss})
 
             # Load real and generated mel-spectrograms
             #real_mels = batch = next(iter(dataloader))  # Replace with your real mel-spectrograms
@@ -1693,7 +1728,7 @@ if __name__ == '__main__':
 
         # Generate labels, 10 of each class
         class_indices = []
-        for i in range(10):
+        for i in range(1): # Only sampling blues #(10):
             class_indices.extend([i] * 1)
 
         # Convert the list to a tensor
@@ -1714,9 +1749,11 @@ if __name__ == '__main__':
         # # print("Model loaded!")
 
         # randomly generate 10 mel_spectrograms
-        samples = sample(model, image_height=image_size, image_width=image_width, batch_size=10, channels=channels, labels=labels, timesteps=timestep)# These samples will be un-normalised
+        samples = sample(model, image_height=image_size, image_width=image_width, batch_size=len(class_indices), channels=channels, labels=labels, timesteps=timestep)# These samples will be un-normalised
 
-        mel_spectrograms = samples[0].squeeze(1)
+        #mel_spectrograms = samples[0].squeeze(1) # if there is only 1 image per sample
+        mel_spectrograms = [sample_imgs.squeeze(1) for sample_imgs in samples] # Each sample contains a list of 5 images demonstrating the reverse diffusion process
+
 
         save_samples(mel_spectrograms)
 
