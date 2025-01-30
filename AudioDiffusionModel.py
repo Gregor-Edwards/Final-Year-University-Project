@@ -42,7 +42,11 @@ from torchaudio.transforms import MelSpectrogram
 from torchvision.models import inception_v3
 from torch.utils.data import DataLoader
 
-
+# TODO: wanb.watch(model, ...) # Use to track exploding gradients etc.
+# Also document my decisions and hypotheses as I go, so that I can use it within the writeup later!!!!!!!!!
+# E.G. When testing different hyperparameters I noticed that there was a large impact to the model performance when adjusting the noise schedule, particularly by reducing the amount of noise added in each timestep. (This should be in line with the research in which the model can better approximate smaller amounts of noise)
+# Test with just tones
+# Test with different noise schedules
 
 # Utility methods
 
