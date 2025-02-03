@@ -70,7 +70,7 @@ def extract(a, t, x_shape):
 
 
 
-# Dataset
+# Datasets
 
 class GTZANDataset(Dataset):
     def __init__(self, root_dir, cache_dir=None, db_cache_path=None, transform=None, sample_rate=22050, n_mels=256, fmax=15000, target_seconds=30):
@@ -279,6 +279,126 @@ class GTZANDataset(Dataset):
 
         if self.transform:
             sample = self.transform(sample)
+
+        return sample
+
+#import os
+#import numpy as np
+import soundfile as sf
+from scipy.signal import sawtooth
+#import librosa
+#import matplotlib.pyplot as plt
+
+class SawtoothDataset:
+    def __init__(self, root_dir, cache_dir=None, db_cache_path=None, sample_rate=22050, n_mels=256, fmax=15000, duration=5):
+        self.root_dir = root_dir
+        self.cache_dir = cache_dir if cache_dir else os.path.join(root_dir, 'cache')
+        self.db_cache_path = db_cache_path if db_cache_path else os.path.join(root_dir, 'db_cache')
+        self.sample_rate = sample_rate
+        self.n_mels = n_mels
+        self.fmax = fmax
+        self.duration = duration
+        self.notes = {
+            'C4': 261.63, 'C#4': 277.18, 'D4': 293.66, 'D#4': 311.13, 'E4': 329.63, 'F4': 349.23, 
+            'F#4': 369.99, 'G4': 392.00, 'G#4': 415.30, 'A4': 440.00, 'A#4': 466.16, 'B4': 493.88, 
+            'C5': 523.25, 'C#5': 554.37, 'D5': 587.33, 'D#5': 622.25, 'E5': 659.25, 'F5': 698.46, 
+            'F#5': 739.99, 'G5': 783.99, 'G#5': 830.61, 'A5': 880.00, 'A#5': 932.33, 'B5': 987.77, 
+            'C6': 1046.50, 'C#6': 1108.73, 'D6': 1174.66, 'D#6': 1244.51, 'E6': 1318.51, 'F6': 1396.91, 
+            'F#6': 1479.98, 'G6': 1567.98, 'G#6': 1661.22, 'A6': 1760.00, 'A#6': 1864.66, 'B6': 1975.53
+        }
+        self.files = list(self.notes.keys())
+        self.note_to_class = {note: idx for idx, note in enumerate(self.files)}
+
+    def generate_sawtooth_wave(self, frequency):
+        t = np.linspace(0, self.duration, int(self.sample_rate * self.duration), endpoint=False)
+        waveform = sawtooth(2 * np.pi * frequency * t)
+        return waveform
+
+    def save_waveform(self, waveform, note):
+        output_path = os.path.join(self.root_dir, f"{note}_sawtooth.wav")
+        sf.write(output_path, waveform, self.sample_rate)
+        print(f"Saved {output_path}")
+
+    def create_mel_spectrogram_from_waveform(self, waveform, sample_rate):
+        mel_spectrogram = librosa.feature.melspectrogram(y=waveform.numpy().squeeze(),
+                                                         sr=sample_rate, 
+                                                         n_fft=2048, 
+                                                         hop_length=512, 
+                                                         win_length=None, 
+                                                         window='hann', 
+                                                         center=True, 
+                                                         pad_mode='reflect', 
+                                                         power=2.0,
+                                                         n_mels=128)
+        return mel_spectrogram
+
+    def save_mel_spectrograms(self):
+        for note in tqdm(self.notes.keys(), desc="Processing files"):
+            audio_path = os.path.join(self.root_dir, f"{note}_sawtooth.wav")
+            cache_path = os.path.join(self.cache_dir, f"{note}.npy")
+            db_cache_path = os.path.join(self.db_cache_path, f"{note}_db.npy")
+
+            # Create directories if they don't exist
+            if not os.path.exists(os.path.dirname(cache_path)):
+                os.makedirs(os.path.dirname(cache_path))
+            if not os.path.exists(os.path.dirname(db_cache_path)):
+                os.makedirs(os.path.dirname(db_cache_path))
+
+            # Skip if files already exist
+            if os.path.exists(cache_path) and os.path.exists(db_cache_path):
+                continue
+
+            self.save_mel_spectrogram(audio_path, cache_path, db_cache_path)
+
+    def save_mel_spectrogram(self, sawtooth_path, cache_path, db_cache_path):
+        # If the sawtooth waveform does not exist, create the waveform
+        note = os.path.basename(sawtooth_path).replace('_sawtooth.wav', '')
+        if not os.path.exists(sawtooth_path):
+            waveform = self.generate_sawtooth_wave(self.notes[note])
+            self.save_waveform(waveform, note)
+
+        waveform, sample_rate = torchaudio.load(sawtooth_path)
+
+        # Compute mel-spectrogram
+        mel_spectrogram = self.create_mel_spectrogram_from_waveform(waveform, sample_rate)
+
+        # Convert to dB scale
+        mel_spectrogram_db = librosa.power_to_db(mel_spectrogram, ref=np.max)
+
+        # Save both mel-spectrogram and dB scale version to disk
+        np.save(cache_path, mel_spectrogram)
+        np.save(db_cache_path, mel_spectrogram_db)
+
+        return mel_spectrogram, mel_spectrogram_db
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        note = self.files[idx]
+        sawtooth_path = os.path.join(self.root_dir, f"{note}_sawtooth.wav")
+        cache_path = os.path.join(self.cache_dir, f"{note}.npy")
+        db_cache_path = os.path.join(self.db_cache_path, f"{note}_db.npy")
+
+        # Load saved mel-spectrogram and mel-spectrogram_db if they exist
+        if os.path.exists(cache_path) and os.path.exists(db_cache_path):
+            mel_spectrogram_db = torch.tensor(np.load(db_cache_path))
+        else:
+            mel_spectrogram, mel_spectrogram_db = self.save_mel_spectrogram(sawtooth_path, cache_path, db_cache_path)
+
+        # Normalize the mel-spectrogram
+        mel_spectrogram_db = min_max_normalize(mel_spectrogram_db)
+
+        ## Normalize the mel-spectrogram
+        #mel_spectrogram_db = (mel_spectrogram_db - mel_spectrogram_db.min()) / (mel_spectrogram_db.max() - mel_spectrogram_db.min())
+
+        # Get the waveform
+        waveform, sample_rate = torchaudio.load(sawtooth_path)
+
+        sample = {'mel_spectrogram': mel_spectrogram_db, 'sample_rate': self.sample_rate, 'note': self.note_to_class[note]} #, 'waveform': waveform}
 
         return sample
 
@@ -1036,8 +1156,17 @@ class ClassConditionalUnet(Unet):
         # Concatenate class embedding to the input image
         if label is not None:
             label_emb = self.label_emb(label)
-            label_emb = label_emb.unsqueeze(-1).unsqueeze(-1)           # Reshape to [batch_size, emb_dim, 1, 1]
-            x = torch.cat((x, label_emb.expand(-1, -1, x.shape[2], x.shape[3])), dim=1)
+            label_emb = label_emb.unsqueeze(-1).unsqueeze(-1)  # Reshape to [batch_size, emb_dim, 1, 1]
+            label_emb = label_emb.expand(-1, -1, x.shape[2], x.shape[3])  # Now label_emb should be [12, emb_dim, 128, 216]
+
+            # Check the batch sizes and dimensions for concatenation
+            #print(f"x shape: {x.shape}, label_emb shape: {label_emb.shape}")
+            assert x.shape[0] == label_emb.shape[0], f"The batch sizes should be the same, but are actually: {x.shape[0]} and {label_emb.shape[0]}!"
+            
+            # Concatenate along the channel dimension
+            x = torch.cat((x, label_emb), dim=1)
+
+
 
         #print("X Starting Shape: ", x.shape)
         
@@ -1396,10 +1525,10 @@ if __name__ == '__main__':
 
     # # # Hyperparameters
 
-    epochs = 2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    epochs = 2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
     timesteps = [4000] # 1000
-    beta_starts = [0.00001] # Noise scheduler start
-    beta_ends = [0.0004] # Noise scheduler end
+    beta_starts = [0.00001]#[0.000005] # Noise scheduler start
+    beta_ends = [0.001]#[0.0003] # Noise scheduler end
     learning_rates = [1e-4]#, 1e-3] # 1e-5, too low with a learning rate scheduler, 1e-3 too high
     warmup = 0.0
     dim_mults = [(1, 2, 4,)]# , (1, 2, 4, 8,) makes no noticable improvement] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
@@ -1420,7 +1549,7 @@ if __name__ == '__main__':
     channels = 1 # Single-channel for mel-spectrograms
     batch_size = 4 #8#32#128
     
-    num_classes = 10
+    num_classes = 36 #len(dataset.notes)
 
     torch.manual_seed(0) # use seed for reproducability
     sample_rate = 22050 # All files in the  dataset should have this sample_rate
@@ -1432,7 +1561,7 @@ if __name__ == '__main__':
 
     # Perform multiple runs sequencially
     for i, (timestep, beta_start, beta_end, learning_rate, architecture, emb_dim, loss_type) in enumerate(product(timesteps, beta_starts, beta_ends, learning_rates, dim_mults, emb_dims, loss_type)):
-        print(f"Preparing to run {i+1}/{total_runs} with parameters: timestep={timestep}, beta_start={beta_start}, beta_end={beta_end}, learning_rate={learning_rate}, architecture={architecture}, emb_dim={emb_dim}, loss_type={loss_type}")
+        print(f"Preparing to run {i+1}/{total_runs} with linear schedule, timestep={timestep}, beta_start={beta_start}, beta_end={beta_end}, learning_rate={learning_rate}, architecture={architecture}, emb_dim={emb_dim}, loss_type={loss_type}")
 
 
         # define beta schedule (a bad beta schedule that contains too much noise too early may make the model learn to produce blank mel-spectrograms)
@@ -1464,7 +1593,7 @@ if __name__ == '__main__':
         print("Current Date:", date_str)
 
 
-        run_name = f'Run_{i+1}_Date_{date_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_lr_{len(architecture)}_layers_{emb_dim}_emb_dim_{loss_type}_loss_blues_only' # MAKE SURE THIS NAME IS NOT TOO LONG!!!
+        run_name = f'Run_{i+1}_Date_{date_str}_{epochs}_epochs_{timestep}_timesteps_{beta_start}_beta_start_{beta_end}_beta_end_{learning_rate}_lr_{len(architecture)}_layers_{emb_dim}_emb_dim_{loss_type}_loss_sawtooth' # MAKE SURE THIS NAME IS NOT TOO LONG!!!
 
         # start a new wandb run to track this script
         wandb.init(
@@ -1478,6 +1607,7 @@ if __name__ == '__main__':
             config={
             "epochs": epochs,
             "batch_size": batch_size,
+            "Noise scheduler": "linear",
             "timesteps": timestep,
             "beta_start": beta_start,
             "beta_end": beta_end,
@@ -1487,7 +1617,7 @@ if __name__ == '__main__':
             "architecture": "CNN",
             "number_of_layers": len(architecture),
             "loss_type": loss_type,
-            "dataset": "GTZAN",
+            "dataset": "Sawtooth waveforms",
             }
         )
 
@@ -1499,8 +1629,13 @@ if __name__ == '__main__':
         # Done within the dataset itself
 
         # Import dataset and setup dataloader
-        dataset = GTZANDataset(root_dir="GTZAN_Genre_Collection/genres", cache_dir="GTZAN_Genre_Collection/cached_mel_spectrograms", db_cache_path="GTZAN_Genre_Collection/cached_mel_spectrograms_db", target_seconds=target_seconds)#, transform=transform) # 5 seconds since this produces a round width on the mel-spectrograms that can be split many times
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True, prefetch_factor=2) # 2 workers if using large epochs TODO: Augment the dataset
+        #dataset = GTZANDataset(root_dir="GTZAN_Genre_Collection/genres", cache_dir="GTZAN_Genre_Collection/cached_mel_spectrograms", db_cache_path="GTZAN_Genre_Collection/cached_mel_spectrograms_db", target_seconds=target_seconds)#, transform=transform) # 5 seconds since this produces a round width on the mel-spectrograms that can be split many times
+
+        dataset = SawtoothDataset(root_dir="sawtooth_waveforms", cache_dir="sawtooth_waveforms/cached_mel_spectrograms", db_cache_path="sawtooth_waveforms/cached_mel_spectrograms_db")
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True) # 2 workers if using large epochs TODO: Augment the dataset
+        #  num_workers=0 , prefetch_factor=2
+
+
 
         # Save mel-spectrograms to disk if they are not present
         print("Saving mel spectrograms")
@@ -1518,7 +1653,7 @@ if __name__ == '__main__':
         # Print the first item's genre and shape of the waveform
         print("Getting first item...")
         first_item = dataset[0]
-        print(f"Genre: {first_item['genre']}, Mel-Spectrogram shape: {first_item['mel_spectrogram'].shape}, Sample Rate: {first_item['sample_rate']}")
+        print(f"Note: {first_item['note']}, Mel-Spectrogram shape: {first_item['mel_spectrogram'].shape}, Sample Rate: {first_item['sample_rate']}")#, Waveform: {first_item['waveform']}")
 
         # # # Display the forward diffusion process for the mel-spectrogram
         # TODO: upload an example of the reverse diffusion process (after training) to weights and biases
@@ -1544,6 +1679,8 @@ if __name__ == '__main__':
         # # plot_mel_spectrogram(first_item['mel_spectrogram'], first_item['sample_rate'])
         # # #plot_mel_spectrogram(create_mel_spectogram_from_waveform(first_item['waveform'], first_item['sample_rate']), first_item['sample_rate'])
 
+        # # # Play the original waveform
+        # # play_audio_from_waveform(first_item['waveform'].numpy().squeeze(), sample_rate)
         
         # # # De-normalise the mel-spectrogram
         # # mel_spectrogram_db = first_item['mel_spectrogram']# db scale, normalised mel-spectrogram
@@ -1661,7 +1798,7 @@ if __name__ == '__main__':
 
 
                 #batch_labels = torch.tensor(batch['genre'], dtype=torch.long).to(device) # Sample t uniformly for every example in the batch
-                batch_labels = batch['genre'].to(device) # Add labels to the training batch
+                batch_labels = batch['note'].to(device) # Add labels to the training batch
 
                 #print("Batch keys: ", batch.keys())
                 #print("Labels: ", batch_labels.shape)
@@ -1732,7 +1869,7 @@ if __name__ == '__main__':
 
         # Generate labels, 10 of each class
         class_indices = []
-        for i in range(1): # Only sampling blues #(10):
+        for i in range(12):#2):#len(dataset.notes)): # Only sampling blues #(10):
             class_indices.extend([i] * 1)
 
         # Convert the list to a tensor
