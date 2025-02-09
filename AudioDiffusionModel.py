@@ -1525,13 +1525,13 @@ if __name__ == '__main__':
 
     # # # Hyperparameters
 
-    epochs = 200#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    epochs = 2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
     timesteps = [4000] # 1000
-    beta_starts = [0.00001, 0.00002]#[0.000005] # Noise scheduler start
-    beta_ends = [0.0004, 0.0006, 0.0008, 0.001]#[0.0003] # Noise scheduler end
+    beta_starts = [0.00001]#, 0.00002]#[0.000005] # Noise scheduler start
+    beta_ends = [0.001]#[0.0004, 0.0006, 0.0008, 0.0003] # Noise scheduler end
     learning_rates = [1e-4]#, 1e-3] # 1e-5, too low with a learning rate scheduler, 1e-3 too high
     warmup = 0.0
-    dim_mults = [(1,), (1, 2,), (1, 2, 4,), (1, 2, 4, 8,)] # , (1, 2, 4, 8,) makes no noticable improvement] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
+    dim_mults = [(1, 2, 4,)]#, (1, 2, 4, 8,)] # , (1, 2, 4, 8,) makes no noticable improvement] #(1, 2, 4,) # Model structure (number of layers and what size should each layer be)
     emb_dims = [10] #[1, 2, 5, 10, 36] # Cannot be set to 0 for no class conditioning#5]#, 10 makes no noticable improvement] # num_classes // 2 # The number of (conditional / class / genre) dimensions that are appended to the input image
     loss_type=["huber"] #["l1", "l2"]
 
@@ -1732,6 +1732,9 @@ if __name__ == '__main__':
         )
         model.to(device)
 
+        wandb.watch(model, log='all')
+        #wandb.log()
+
         # Define the optimizer for training the model.
         # - model.parameters(): Parameters of the U-Net model to optimize.
         # - lr=1e-3: Learning rate for the optimizer.
@@ -1865,38 +1868,38 @@ if __name__ == '__main__':
 
         # # # Sample new audio using the trained model
 
-        # # model.eval()
+        model.eval()
 
-        # # # Generate labels, 10 of each class
-        # # class_indices = []
-        # # for i in range(12):#2):#len(dataset.notes)): # Only sampling blues #(10):
-        # #     class_indices.extend([i] * 1)
+        # Generate labels, 10 of each class
+        class_indices = []
+        for i in range(12):#2):#len(dataset.notes)): # Only sampling blues #(10):
+            class_indices.extend([i] * 1)
 
-        # # # Convert the list to a tensor
-        # # labels = torch.tensor(class_indices, device=device)
+        # Convert the list to a tensor
+        labels = torch.tensor(class_indices, device=device)
 
-        # # # Check the labels
-        # # print(labels)
+        # Check the labels
+        print(labels)
 
-        # # # Save the trained model weights
-        # # save_model(model, run_name=run_name, epochs=epochs)
+        # Save the trained model weights
+        save_model(model, run_name=run_name, epochs=epochs)
 
-        # # # # # Load the model state
+        # # # Load the model state
 
-        # # # # # Load the state dictionary into the model
-        # # # # model.load_state_dict(torch.load(fullpath))
-        # # # # model.eval() # Set the model to evaluation mode
+        # # # Load the state dictionary into the model
+        # # model.load_state_dict(torch.load(fullpath))
+        # # model.eval() # Set the model to evaluation mode
 
-        # # # # print("Model loaded!")
+        # # print("Model loaded!")
 
-        # # # randomly generate 10 mel_spectrograms
-        # # samples = sample(model, image_height=image_size, image_width=image_width, batch_size=len(class_indices), channels=channels, labels=labels, timesteps=timestep)# These samples will be un-normalised
+        # randomly generate 10 mel_spectrograms
+        samples = sample(model, image_height=image_size, image_width=image_width, batch_size=len(class_indices), channels=channels, labels=labels, timesteps=timestep)# These samples will be un-normalised
 
-        # # #mel_spectrograms = samples[0].squeeze(1) # if there is only 1 image per sample
-        # # mel_spectrograms = [sample_imgs.squeeze(1) for sample_imgs in samples] # Each sample contains a list of 5 images demonstrating the reverse diffusion process
+        #mel_spectrograms = samples[0].squeeze(1) # if there is only 1 image per sample
+        mel_spectrograms = [sample_imgs.squeeze(1) for sample_imgs in samples] # Each sample contains a list of 5 images demonstrating the reverse diffusion process
 
 
-        # # save_samples(mel_spectrograms)
+        save_samples(mel_spectrograms)
 
         # [optional] finish the wandb run, necessary in notebooks
         wandb.finish()
