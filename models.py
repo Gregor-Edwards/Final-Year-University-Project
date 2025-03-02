@@ -448,6 +448,106 @@ class AudioUnet2D(nn.Module):
         # Final convolution
         return prediction
 
+class ClassConditionedAudioUnet2D(AudioUnet2D):
+    def __init__(self, 
+                 sample_size, 
+                 in_channels=1, 
+                 out_channels=1, 
+                 block_out_channels=(128, 128, 256, 256, 512, 512),
+                 layers_per_block=2,
+                 temb_channels=512,
+                 num_classes=10):  # Add the number of classes for conditioning
+        super().__init__(sample_size, in_channels, out_channels, block_out_channels, layers_per_block, temb_channels)
+
+        # Class embedding layer
+        self.class_label_emb = nn.Embedding(num_classes, temb_channels)
+
+    def forward(self, x, timesteps, class_labels=None):
+        """
+        Args:
+            x: Tensor of shape (batch_size, in_channels, height, width), the noisy input samples.
+            timesteps: Tensor of shape (batch_size,), the timesteps corresponding to the noisy samples.
+            class_labels: Tensor of shape (batch_size,), the class labels for conditioning.
+        Returns:
+            prediction: Tensor of shape (batch_size, out_channels, height, width), the predicted noise.
+        """
+        # Compute timestep embedding
+        temb = self.time_mlp(timesteps)
+
+        # Add class label embedding to timestep embedding
+        if class_labels is not None:
+            class_emb = self.class_label_emb(class_labels)  # Shape: (batch_size, temb_channels)
+            temb = temb + class_emb  # Combine timestep embedding with class embedding
+
+        # Initial convolution
+        x = self.init_conv(x)
+
+        # Downsampling
+        h1 = self.down1_block1(x, temb)
+        h1 = self.down1_block2(h1, temb)
+        h1_downsampled = self.down1_pool(h1)
+
+        h2 = self.down2_block1(h1_downsampled, temb)
+        h2 = self.down2_block2(h2, temb)
+        h2_downsampled = self.down2_pool(h2)
+
+        h3 = self.down3_block1(h2_downsampled, temb)
+        h3 = self.down3_block2(h3, temb)
+        h3_downsampled = self.down3_pool(h3)
+
+        h4 = self.down4_block1(h3_downsampled, temb)
+        h4 = self.down4_block2(h4, temb)
+        h4_downsampled = self.down4_pool(h4)
+
+        h5 = self.down5_block1(h4_downsampled, temb)
+        h5 = self.down5_block2(h5, temb)
+        h5_shape = h5.shape
+        h5 = h5.view(h5_shape[0], h5_shape[1], -1).permute(0, 2, 1)  # Reshape for attention
+        h5 = self.down5_attention(h5, h5, h5)[0]
+        h5 = h5.permute(0, 2, 1).view(h5_shape)  # Restore shape
+        h5_downsampled = self.down5_pool(h5)
+
+        h6 = self.down6_block1(h5_downsampled, temb)
+        h6 = self.down6_block2(h6, temb)
+
+        # Bottleneck
+        x = self.bottleneck_block1(h6, temb)
+        b_shape = x.shape
+        x = x.view(b_shape[0], b_shape[1], -1).permute(0, 2, 1)  # Prepare for attention
+        x, _ = self.bottleneck_attention(x, x, x)
+        x = x.permute(0, 2, 1).view(b_shape)  # Restore shape
+        x = self.bottleneck_block2(x, temb)
+
+        # Upsampling
+        x = self.up6_upsample(x)
+        x = torch.cat([x, h5], dim=1)
+        x = self.up6_block1(x, temb)
+        x = self.up6_block2(x, temb)
+
+        x = self.up5_upsample(x)
+        x = torch.cat([x, h4], dim=1)
+        x = self.up5_block1(x, temb)
+        x = self.up5_block2(x, temb)
+
+        x = self.up4_upsample(x)
+        x = torch.cat([x, h3], dim=1)
+        x = self.up4_block1(x, temb)
+        x = self.up4_block2(x, temb)
+
+        x = self.up3_upsample(x)
+        x = torch.cat([x, h2], dim=1)  # Skip connection
+        x = self.up3_block1(x, temb)
+        x = self.up3_block2(x, temb)
+
+        x = self.up2_upsample(x)
+        x = torch.cat([x, h1], dim=1)  # Skip connection
+        x = self.up2_block1(x, temb)
+        x = self.up2_block2(x, temb)
+
+        prediction = self.final_conv(x)
+
+        return prediction
+
 
 class SimplifiedUNet2D(nn.Module):
     def __init__(self, 
@@ -868,3 +968,7 @@ class ClassConditionalUnet(Unet):
             x = upsample(x)
 
         return self.final_conv(x) # Final convolution to get output
+
+
+
+# TODO: Test forward diffusion

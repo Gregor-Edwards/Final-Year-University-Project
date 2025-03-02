@@ -56,7 +56,7 @@ class GTZANDataset(Dataset):
         self.spectrogram_slices = [] # Stores each time slice of the converted mel-spectrograms. These are the actual items used in the diffusion process
 
         # Add each file to the dataset
-        print("GENRES: ", self.genres)
+        print("GENRES: ", self.genres) # GENRES:  ['blues', 'classical', 'country', 'disco', 'hiphop', 'jazz', 'metal', 'pop', 'reggae', 'rock']
         for genre in self.genres:
             genre_dir = os.path.join(root_dir, genre)
             if os.path.isdir(genre_dir):
@@ -159,6 +159,8 @@ class GTZANDataset(Dataset):
                 # Save the time slice image
                 #print("Saving image to: ", spectrogram_path)
                 image.save(spectrogram_path, format="PNG")
+        
+        # TODO: When first loading the dataset and saving the mel-spectrogram slices, this will crash due to the time slices not getting added to the self.spectrogram_slices parameter
                 
         return
     
@@ -196,6 +198,12 @@ class GTZANDataset(Dataset):
         image_path = self.spectrogram_slices[idx]
         sample_rate = 22050 # all files should have the same sample rate
 
+        # Extract the file name (e.g., "blues.00000.au_0.png") regardless of folder structure
+        file_name = os.path.basename(image_path)
+        genre, file_number, slice_number = file_name.split('.')[0], file_name.split('.')[1], file_name.split('_')[1].split('.')[0]
+        
+        class_label = self.genre_to_class[genre]  # Map genre to class label
+
         # Load saved mel-spectrogram slice if it exists
         if os.path.exists(image_path):
             #print("Cached files found! Loading...")
@@ -204,6 +212,76 @@ class GTZANDataset(Dataset):
         # Transform the spectrogram slices correctly
         image = augmentations(image)#image.convert("RGB"))
 
-        sample = {'image': image, 'sample_rate': sample_rate}
+        sample = {'image': image, 'label': class_label, 'sample_rate': sample_rate}
 
         return sample
+    
+
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+    import torchaudio
+    import librosa.display
+    from IPython.display import Audio, display
+    import sounddevice as sd
+
+
+    # Initialize dataset
+    root_dir = "GTZAN_Genre_Collection/genres"
+    spectrogram_dir = "GTZAN_Genre_Collection/slices"
+    resolution = (256, 256)  # Resolution of mel-spectrogram slices
+    dataset = GTZANDataset(resolution, root_dir, spectrogram_dir)
+
+    # Get the first file in the dataset
+    if len(dataset.files) == 0:
+        raise ValueError("No audio files found in the dataset!")
+    
+    audio_path, genre = dataset.files[0]  # Retrieve the first audio file and its genre
+    print(f"Testing file: {audio_path}, Genre: {genre}")
+
+    # Load the audio file
+    waveform, sample_rate = torchaudio.load(audio_path)
+    print(f"Loaded waveform shape: {waveform.shape}, Sample rate: {sample_rate}")
+
+    # Ensure the waveform is mono
+    if waveform.ndim == 2:
+        waveform = waveform.mean(dim=0)  # Convert to mono by averaging channels
+
+    waveform = waveform.numpy()
+
+    # Convert the waveform to a mel-spectrogram
+    mel_spectrogram = dataset.audio_to_mel_spectrogram(waveform)
+    print(f"Generated mel-spectrogram of size: {mel_spectrogram.size}")
+
+    # Display the mel-spectrogram
+    plt.figure(figsize=(10, 4))
+    plt.imshow(mel_spectrogram, cmap='inferno', aspect='auto')
+    plt.title(f"Mel-Spectrogram for File: {audio_path}")
+    plt.xlabel('Time')
+    plt.ylabel('Frequency')
+    plt.colorbar(label='Intensity')
+    plt.show()
+
+    # Convert the mel-spectrogram back to audio
+    reconstructed_audio = dataset.mel_spectrogram_to_audio(mel_spectrogram)
+    print(f"Reconstructed audio length: {len(reconstructed_audio)}, Sample rate: {dataset.sample_rate}")
+
+    # Compare the original and reconstructed audio
+    plt.figure(figsize=(15, 5))
+    plt.subplot(2, 1, 1)
+    plt.title("Original Audio")
+    plt.plot(waveform)
+    plt.subplot(2, 1, 2)
+    plt.title("Reconstructed Audio")
+    plt.plot(reconstructed_audio)
+    plt.tight_layout()
+    plt.show()
+
+    # Listen to original and reconstructed audio (use IPython.display for playback in notebooks)
+    print("Playing Original Audio:")
+    display(Audio(waveform, rate=dataset.sample_rate))
+    sd.play(waveform, dataset.sample_rate)
+    sd.wait()
+    print("Playing Reconstructed Audio:")
+    display(Audio(reconstructed_audio, rate=dataset.sample_rate))
+    sd.play(reconstructed_audio, dataset.sample_rate)
+    sd.wait()
