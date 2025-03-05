@@ -43,7 +43,7 @@ class GTZANDataset(Dataset):
         # File management
         self.root_dir = root_dir # Directory where the audio genre folders are stored. Each genre folder should contain the list of audio files to use in the dataset.
         self.spectrogram_dir = spectrogram_dir # Directory to store mel-spectrograms of the audio files (Done to reduce loading times)
-        self.genres = os.listdir(root_dir) #Testing only 1 genre (blues) os.listdir(root_dir)
+        self.genres = os.listdir(root_dir)
         self.files = [] # Stores the file names of each waveform sample
 
         # Mel-spectrogram time-slice conversion
@@ -119,10 +119,15 @@ class GTZANDataset(Dataset):
             #print("Waveform: ", waveform.shape, len(waveform))
             number_of_samples = len(waveform)#waveform.shape[1]
             slice_size = self.resolution[1] * self.hop_length - 1
-            number_of_time_slices = number_of_samples // slice_size
+            #number_of_time_slices = number_of_samples // slice_size
+            step_size = slice_size // 2  # 50% overlap
+            number_of_time_slices = (number_of_samples - slice_size) // step_size + 1
 
             for slice in range(number_of_time_slices):
                 spectrogram_path = os.path.join(self.spectrogram_dir, f"{os.path.basename(audio_path)}_{slice}.png")
+                start_idx = slice * step_size
+                end_idx = start_idx + slice_size
+
 
                 # Create directories if they don't exist
                 if not os.path.exists(os.path.dirname(spectrogram_path)):
@@ -135,18 +140,7 @@ class GTZANDataset(Dataset):
                     continue
 
                 # Convert time-slice to spectrogram image
-                audio_slice = waveform[slice_size * slice : slice_size * (slice + 1)]#.numpy()
-                #print("Audio-slice: ", audio_slice.shape, slice, slice_size)
-                # # mel_spectrogram_power = librosa.feature.melspectrogram(
-                # #     y=audio_slice,
-                # #     sr=self.sample_rate,
-                # #     n_fft=self.n_fft,
-                # #     hop_length=self.hop_length,
-                # #     n_mels=self.resolution[1]
-                # # )
-                # # log_mel_spectrogram = librosa.power_to_db(mel_spectrogram_power, ref=np.max, top_db=self.top_db)
-                # # bytedata = (((log_mel_spectrogram + self.top_db) * 255 / self.top_db).clip(0, 255) + 0.5).astype(np.uint8)
-                # # image = Image.fromarray(bytedata)
+                audio_slice = waveform[start_idx : end_idx]#.numpy()
                 image = self.audio_to_mel_spectrogram(audio_slice)
 
                 #print("Time-slice: ", slice, "Image-size: ", image.width, image.height)
@@ -160,8 +154,16 @@ class GTZANDataset(Dataset):
                 #print("Saving image to: ", spectrogram_path)
                 image.save(spectrogram_path, format="PNG")
         
-        # TODO: When first loading the dataset and saving the mel-spectrogram slices, this will crash due to the time slices not getting added to the self.spectrogram_slices parameter
-                
+        # If there are currently no samples in the self.spectrogram_slices parameter, then add them here
+        if len(self.spectrogram_slices) == 0:
+            print("Slices have not yet been added to the dataset! Adding them now...")
+            if os.path.exists(self.spectrogram_dir):
+                for file in os.listdir(self.spectrogram_dir):
+                    if file.endswith('.png'):
+                        self.spectrogram_slices.append(os.path.join(self.spectrogram_dir, file))
+            print("Done.")
+
+
         return
     
     def audio_to_mel_spectrogram(self, input_audio):

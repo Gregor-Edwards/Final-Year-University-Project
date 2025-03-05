@@ -109,13 +109,19 @@ class ResnetBlock(nn.Module):
     """Residual block using two Block layers and a residual connection.
        https://arxiv.org/abs/1512.03385"""
 
-    def __init__(self, dim, dim_out, *, time_emb_dim=None, groups=8):
+    def __init__(self, dim, dim_out, *, time_emb_dim=None, class_emb_dim=None, groups=8):
         super().__init__()
         
         # Conditional MLP for time embedding if provided
-        self.mlp = (
+        self.time_emb_mlp = (
             nn.Sequential(nn.SiLU(), nn.Linear(time_emb_dim, dim_out))
             if exists(time_emb_dim)
+            else None
+        )
+
+        self.class_emb_mlp = (
+            nn.Sequential(nn.SiLU(), nn.Linear(class_emb_dim, dim_out))
+            if exists(class_emb_dim)
             else None
         )
 
@@ -123,13 +129,18 @@ class ResnetBlock(nn.Module):
         self.block2 = Block(dim_out, dim_out, groups=groups) # Second Block layer
         self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity() # Adjusts input if needed
 
-    def forward(self, x, time_emb=None):
+    def forward(self, x, time_emb=None, class_emb=None):
         h = self.block1(x)
 
         # Adds time embedding if it exists
-        if exists(self.mlp) and exists(time_emb):
-            time_emb = self.mlp(time_emb)
+        if exists(self.time_emb_mlp) and exists(time_emb):
+            time_emb = self.time_emb_mlp(time_emb)
             h = rearrange(time_emb, "b c -> b c 1 1") + h
+
+        # Adds class embedding if it exists (do not use)
+        if exists(self.class_emb_mlp) and exists(class_emb):
+            class_emb = self.class_emb_mlp(class_emb)
+            h = rearrange(class_emb, "b c -> b c 1 1") + h
 
         h = self.block2(h) # Second Block
         return h + self.res_conv(x) # Residual connection
@@ -462,6 +473,14 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         # Class embedding layer
         self.class_label_emb = nn.Embedding(num_classes, temb_channels)
 
+        # An attempt to separate out the timestep conditioning from the class conditioning
+        self.combined_mlp = nn.Sequential(
+            nn.Linear(temb_channels * 2, temb_channels),
+            nn.GELU(),
+            nn.Linear(temb_channels, temb_channels),
+        )
+
+
     def forward(self, x, timesteps, class_labels=None):
         """
         Args:
@@ -477,72 +496,78 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         # Add class label embedding to timestep embedding
         if class_labels is not None:
             class_emb = self.class_label_emb(class_labels)  # Shape: (batch_size, temb_channels)
-            temb = temb + class_emb  # Combine timestep embedding with class embedding
+            #temb = temb + class_emb  # Combine timestep embedding with class embedding given that they have the same shape for a fused conditioning signal
+            
+            combined_emb = torch.cat([temb, class_emb], dim=-1)
+            combined_emb = self.combined_mlp(combined_emb)  # Reduce back to temb_channels
+
+            temb = combined_emb
+
 
         # Initial convolution
         x = self.init_conv(x)
 
         # Downsampling
-        h1 = self.down1_block1(x, temb)
-        h1 = self.down1_block2(h1, temb)
+        h1 = self.down1_block1(x, temb)#, class_emb)
+        h1 = self.down1_block2(h1, temb)#, class_emb)
         h1_downsampled = self.down1_pool(h1)
 
-        h2 = self.down2_block1(h1_downsampled, temb)
-        h2 = self.down2_block2(h2, temb)
+        h2 = self.down2_block1(h1_downsampled, temb)#, class_emb)
+        h2 = self.down2_block2(h2, temb)#, class_emb)
         h2_downsampled = self.down2_pool(h2)
 
-        h3 = self.down3_block1(h2_downsampled, temb)
-        h3 = self.down3_block2(h3, temb)
+        h3 = self.down3_block1(h2_downsampled, temb)#, class_emb)
+        h3 = self.down3_block2(h3, temb)#, class_emb)
         h3_downsampled = self.down3_pool(h3)
 
-        h4 = self.down4_block1(h3_downsampled, temb)
-        h4 = self.down4_block2(h4, temb)
+        h4 = self.down4_block1(h3_downsampled, temb)#, class_emb)
+        h4 = self.down4_block2(h4, temb)#, class_emb)
         h4_downsampled = self.down4_pool(h4)
 
-        h5 = self.down5_block1(h4_downsampled, temb)
-        h5 = self.down5_block2(h5, temb)
+        h5 = self.down5_block1(h4_downsampled, temb)#, class_emb)
+        h5 = self.down5_block2(h5, temb)#, class_emb)
         h5_shape = h5.shape
         h5 = h5.view(h5_shape[0], h5_shape[1], -1).permute(0, 2, 1)  # Reshape for attention
         h5 = self.down5_attention(h5, h5, h5)[0]
         h5 = h5.permute(0, 2, 1).view(h5_shape)  # Restore shape
         h5_downsampled = self.down5_pool(h5)
 
-        h6 = self.down6_block1(h5_downsampled, temb)
-        h6 = self.down6_block2(h6, temb)
+        h6 = self.down6_block1(h5_downsampled, temb)#, class_emb)
+        h6 = self.down6_block2(h6, temb)#, class_emb)
 
         # Bottleneck
-        x = self.bottleneck_block1(h6, temb)
+        x = self.bottleneck_block1(h6, temb)#, class_emb)
         b_shape = x.shape
         x = x.view(b_shape[0], b_shape[1], -1).permute(0, 2, 1)  # Prepare for attention
         x, _ = self.bottleneck_attention(x, x, x)
         x = x.permute(0, 2, 1).view(b_shape)  # Restore shape
-        x = self.bottleneck_block2(x, temb)
+        x = self.bottleneck_block2(x, temb)#, class_emb)
 
         # Upsampling
         x = self.up6_upsample(x)
         x = torch.cat([x, h5], dim=1)
-        x = self.up6_block1(x, temb)
-        x = self.up6_block2(x, temb)
+        x = self.up6_block1(x, temb)#, class_emb)
+        x = self.up6_block2(x, temb)#, class_emb)
 
         x = self.up5_upsample(x)
         x = torch.cat([x, h4], dim=1)
-        x = self.up5_block1(x, temb)
-        x = self.up5_block2(x, temb)
+        x = self.up5_block1(x, temb)#, class_emb)
+        x = self.up5_block2(x, temb)#, class_emb)
 
         x = self.up4_upsample(x)
         x = torch.cat([x, h3], dim=1)
-        x = self.up4_block1(x, temb)
-        x = self.up4_block2(x, temb)
+        x = self.up4_block1(x, temb)#, class_emb)
+        x = self.up4_block2(x, temb)#, class_emb)
 
         x = self.up3_upsample(x)
         x = torch.cat([x, h2], dim=1)  # Skip connection
-        x = self.up3_block1(x, temb)
-        x = self.up3_block2(x, temb)
+        x = self.up3_block1(x, temb)#, class_emb)
+        x = self.up3_block2(x, temb)#, class_emb)
 
         x = self.up2_upsample(x)
         x = torch.cat([x, h1], dim=1)  # Skip connection
-        x = self.up2_block1(x, temb)
-        x = self.up2_block2(x, temb)
+        x = self.up2_block1(x, temb)#, class_emb)
+        x = self.up2_block2(x, temb)#, class_emb)
 
         prediction = self.final_conv(x)
 
