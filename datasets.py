@@ -214,7 +214,10 @@ class GTZANDataset(Dataset):
         # Transform the spectrogram slices correctly
         image = augmentations(image)#image.convert("RGB"))
 
-        sample = {'image': image, 'label': class_label, 'sample_rate': sample_rate}
+        # Convert the slice number to a tensor
+        slice_number = torch.tensor(int(slice_number))
+
+        sample = {'image': image, 'label': class_label, 'position': slice_number, 'sample_rate': sample_rate}
 
         return sample
     

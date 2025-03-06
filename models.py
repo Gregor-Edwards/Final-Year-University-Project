@@ -467,21 +467,25 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
                  block_out_channels=(128, 128, 256, 256, 512, 512),
                  layers_per_block=2,
                  temb_channels=512,
-                 num_classes=10):  # Add the number of classes for conditioning
+                 num_classes=10, # Add the number of classes for conditioning
+                 max_position=3): # Add position of the time slices from the dataset 
         super().__init__(sample_size, in_channels, out_channels, block_out_channels, layers_per_block, temb_channels)
 
         # Class embedding layer
         self.class_label_emb = nn.Embedding(num_classes, temb_channels)
 
-        # An attempt to separate out the timestep conditioning from the class conditioning
+        # Positional embedding layer for slice positions
+        self.slice_position_emb = nn.Embedding(max_position + 1, temb_channels) # +1 because 0 is a valid position
+
+        # Combine timestep, class, and positional embeddings
         self.combined_mlp = nn.Sequential(
-            nn.Linear(temb_channels * 2, temb_channels),
+            nn.Linear(temb_channels * 3, temb_channels),  # Adjust for 3 inputs
             nn.GELU(),
             nn.Linear(temb_channels, temb_channels),
         )
 
 
-    def forward(self, x, timesteps, class_labels=None):
+    def forward(self, x, timesteps, class_labels=None, slice_positions=None):
         """
         Args:
             x: Tensor of shape (batch_size, in_channels, height, width), the noisy input samples.
@@ -493,15 +497,15 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         # Compute timestep embedding
         temb = self.time_mlp(timesteps)
 
-        # Add class label embedding to timestep embedding
-        if class_labels is not None:
-            class_emb = self.class_label_emb(class_labels)  # Shape: (batch_size, temb_channels)
-            #temb = temb + class_emb  # Combine timestep embedding with class embedding given that they have the same shape for a fused conditioning signal
-            
-            combined_emb = torch.cat([temb, class_emb], dim=-1)
-            combined_emb = self.combined_mlp(combined_emb)  # Reduce back to temb_channels
+        # Compute class embedding
+        class_emb = self.class_label_emb(class_labels) if class_labels is not None else 0
 
-            temb = combined_emb
+        # Compute positional embedding
+        positional_emb = self.slice_position_emb(slice_positions) if slice_positions is not None else 0
+
+        # Combine timestep, class, and positional embeddings
+        combined_emb = torch.cat([temb, class_emb, positional_emb], dim=-1)
+        combined_emb = self.combined_mlp(combined_emb)  
 
 
         # Initial convolution
