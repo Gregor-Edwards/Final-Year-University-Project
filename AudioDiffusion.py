@@ -22,6 +22,9 @@ from diffusers.optimization import get_cosine_schedule_with_warmup
 # Forward diffusion
 from diffusers import DDPMScheduler
 
+# Reverse diffusion
+import generate_from_pretrained_model
+
 # Weights and Biases
 import wandb
 from datetime import datetime
@@ -253,41 +256,8 @@ if __name__ == "__main__":
     # Check the labels
     print("Class labels: ", class_labels)
 
-    # Initialize noise for the batch
-    images = torch.randn(shape, device=device)
-
-
-
-    # Initialize noise
-    #images = torch.randn(shape, device=device)
-
-    for step in tqdm(reversed(range(0, timesteps)), desc="Sampling timestep", unit="step"):
-
-        # Create a tensor filled with the current timestep for the batch
-        batch_step = torch.full((shape[0],), step, device=device, dtype=torch.long)
-        
-        # Predict the noise for the current batch given the current timestep
-        model_output = model(images, batch_step, class_labels=class_labels) #, slice_positions=slice_positions).detach() # Detaching prevents memory build up at each step
-
-        # Perform the scheduler step and update images in-place
-        images.copy_(noise_scheduler.step(
-            model_output=model_output,
-            timestep=step,
-            sample=images,
-            generator=None,
-        )["prev_sample"].detach())
-
-    # Normalise the image pixel values
-    images = (images / 2 + 0.5).clamp(0, 1) # During pre-processing, the range is from -1 to 1
-
-    # Rearrange the dimensions of the tensor from (batch, channels, height, width) to (batch, height, width, channels) so that they can be correctly displayed
-    images = images.cpu().permute(0, 2, 3, 1).numpy()
-    images = (images * 255).round().astype("uint8")
-    images = list(
-        map(lambda _: Image.fromarray(_[:, :, 0]), images)
-        if images.shape[3] == 1
-        else map(lambda _: Image.fromarray(_, mode="RGB").convert("L"), images)
-    )
+    # Perform reverse diffusion
+    images = generate_from_pretrained_model.generate(model, noise_scheduler, timesteps, shape, class_labels)
 
 
 

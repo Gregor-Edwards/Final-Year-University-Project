@@ -395,4 +395,73 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         combined_emb = self.combined_mlp(combined_emb) 
 
         # Predict the noise using the combined conditional embeddings
-        return super().forward(x, combined_emb)
+        # This cannot reuse the parent class' forward method from here, since the timestep embeddings would be recreated!
+        
+        # Initial convolution
+        x = self.init_conv(x)
+
+        # Downsampling
+        h1 = self.down1_block1(x, temb)#, class_emb)
+        h1 = self.down1_block2(h1, temb)#, class_emb)
+        h1_downsampled = self.down1_pool(h1)
+
+        h2 = self.down2_block1(h1_downsampled, temb)#, class_emb)
+        h2 = self.down2_block2(h2, temb)#, class_emb)
+        h2_downsampled = self.down2_pool(h2)
+
+        h3 = self.down3_block1(h2_downsampled, temb)#, class_emb)
+        h3 = self.down3_block2(h3, temb)#, class_emb)
+        h3_downsampled = self.down3_pool(h3)
+
+        h4 = self.down4_block1(h3_downsampled, temb)#, class_emb)
+        h4 = self.down4_block2(h4, temb)#, class_emb)
+        h4_downsampled = self.down4_pool(h4)
+
+        h5 = self.down5_block1(h4_downsampled, temb)#, class_emb)
+        h5 = self.down5_block2(h5, temb)#, class_emb)
+        h5_shape = h5.shape
+        h5 = h5.view(h5_shape[0], h5_shape[1], -1).permute(0, 2, 1)  # Reshape for attention
+        h5 = self.down5_attention(h5, h5, h5)[0]
+        h5 = h5.permute(0, 2, 1).view(h5_shape)  # Restore shape
+        h5_downsampled = self.down5_pool(h5)
+
+        h6 = self.down6_block1(h5_downsampled, temb)#, class_emb)
+        h6 = self.down6_block2(h6, temb)#, class_emb)
+
+        # Bottleneck
+        x = self.bottleneck_block1(h6, temb)#, class_emb)
+        b_shape = x.shape
+        x = x.view(b_shape[0], b_shape[1], -1).permute(0, 2, 1)  # Prepare for attention
+        x, _ = self.bottleneck_attention(x, x, x)
+        x = x.permute(0, 2, 1).view(b_shape)  # Restore shape
+        x = self.bottleneck_block2(x, temb)#, class_emb)
+
+        # Upsampling
+        x = self.up6_upsample(x)
+        x = torch.cat([x, h5], dim=1)
+        x = self.up6_block1(x, temb)#, class_emb)
+        x = self.up6_block2(x, temb)#, class_emb)
+
+        x = self.up5_upsample(x)
+        x = torch.cat([x, h4], dim=1)
+        x = self.up5_block1(x, temb)#, class_emb)
+        x = self.up5_block2(x, temb)#, class_emb)
+
+        x = self.up4_upsample(x)
+        x = torch.cat([x, h3], dim=1)
+        x = self.up4_block1(x, temb)#, class_emb)
+        x = self.up4_block2(x, temb)#, class_emb)
+
+        x = self.up3_upsample(x)
+        x = torch.cat([x, h2], dim=1)  # Skip connection
+        x = self.up3_block1(x, temb)#, class_emb)
+        x = self.up3_block2(x, temb)#, class_emb)
+
+        x = self.up2_upsample(x)
+        x = torch.cat([x, h1], dim=1)  # Skip connection
+        x = self.up2_block1(x, temb)#, class_emb)
+        x = self.up2_block2(x, temb)#, class_emb)
+
+        prediction = self.final_conv(x)
+        
+        return prediction
