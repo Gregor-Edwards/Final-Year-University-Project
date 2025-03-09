@@ -24,8 +24,8 @@ import tqdm
 
 augmentations = Compose(
         [
-            ToTensor(),
-            Normalize([0.5], [0.5]),
+            ToTensor(), # range from 0 to 1
+            Normalize([0.5], [0.5]), # range from -1 to 1
         ]
     )
 

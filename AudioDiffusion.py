@@ -218,9 +218,6 @@ if __name__ == "__main__":
 
             print("Model uploaded!")
 
-    # Save the trained model weights
-    #run_name = "Please_Work_Class_Conditioning"
-
     # Setup directory to store the model parameters
     filepath = "Saved Models"
     filename = f'{run_name}_{epochs}_epochs_{resolution[0]}_x_res.pth'
@@ -241,7 +238,7 @@ if __name__ == "__main__":
     # Sample new audio using the trained model
 
     # Generate labels: 1 sample for each class (len(dataset.genres) total classes)
-    class_indices = [i for i in range(1)] # First 4 classes # len(dataset.genres))]  # One sample per class
+    class_indices = [i for i in range(1)] # First n classes # len(dataset.genres))]  # One sample per class
 
     # Generate positional indices
     #slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
@@ -269,6 +266,7 @@ if __name__ == "__main__":
         # Create a tensor filled with the current timestep for the batch
         batch_step = torch.full((shape[0],), step, device=device, dtype=torch.long)
         
+        # Predict the noise for the current batch given the current timestep
         model_output = model(images, batch_step, class_labels=class_labels) #, slice_positions=slice_positions).detach() # Detaching prevents memory build up at each step
 
         # Perform the scheduler step and update images in-place
@@ -279,7 +277,10 @@ if __name__ == "__main__":
             generator=None,
         )["prev_sample"].detach())
 
-    images = (images / 2 + 0.5).clamp(0, 1)
+    # Normalise the image pixel values
+    images = (images / 2 + 0.5).clamp(0, 1) # During pre-processing, the range is from -1 to 1
+
+    # Rearrange the dimensions of the tensor from (batch, channels, height, width) to (batch, height, width, channels) so that they can be correctly displayed
     images = images.cpu().permute(0, 2, 3, 1).numpy()
     images = (images * 255).round().astype("uint8")
     images = list(
