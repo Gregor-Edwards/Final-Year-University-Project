@@ -1,5 +1,5 @@
 import datasets
-import models
+import diffusion_models
 import torch.nn.functional as F # to access various functions for neural networks, like activation functions and loss calculations
 from tqdm.auto import tqdm # for showing progress bar
 import os
@@ -74,15 +74,15 @@ if __name__ == "__main__":
     channels = 1 # Mono audio
     num_classes = len(dataset.genres)
 
-    epochs = 100 #2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    epochs = 200 # 100 #2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
     learning_rate = 1e-4#, 1e-3] # 1e-5, too low with a learning rate scheduler, 1e-3 too high
     num_classes = len(dataset.genres)
 
 
     #model = models.SimplifiedUNet2D(resolution).to(device)
     #model = models.AudioUnet2D(resolution).to(device)
-    max_slice_position = 18 # Dependent on the resolution of the slices and the length of the audio samples
-    model = models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes, max_position=max_slice_position).to(device)
+    #max_slice_position = 18 # Dependent on the resolution of the slices and the length of the audio samples
+    model = diffusion_models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes).to(device)#, max_position=max_slice_position).to(device)
 
 
 
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     print("Current Time:", time_str)
     print("Current Date:", date_str)
 
-    run_name = f'Date_{date_str}_{time_str}_{epochs}_epochs_{timesteps}_timesteps_class__position_embeddings_GTZAN' # MAKE SURE THIS NAME IS NOT TOO LONG!!!
+    run_name = f'Date_{date_str}_{time_str}_{epochs}_epochs_{timesteps}_timesteps_class_embeddings_GTZAN' # MAKE SURE THIS NAME IS NOT TOO LONG!!!
 
     # start a new wandb run to track this script
     wandb.init(
@@ -157,7 +157,7 @@ if __name__ == "__main__":
             batch_size = batch['image'].shape[0]
             batch_mel_spectrograms = batch['image'].to(device)
             class_labels = batch['label'].to(device)
-            batch_positions = batch['position'].to(device)
+            #batch_positions = batch['position'].to(device)
 
             #print("Size of the batch images: ", batch_mel_spectrograms.shape)
 
@@ -176,7 +176,7 @@ if __name__ == "__main__":
             noisy_mel_spectrograms = noise_scheduler.add_noise(batch_mel_spectrograms, noise, timestep) # Adds noise depending on the timestep
 
             # Backward diffusion process
-            noise_prediction = model(noisy_mel_spectrograms, timestep, class_labels=class_labels, slice_positions=batch_positions)
+            noise_prediction = model(noisy_mel_spectrograms, timestep, class_labels=class_labels) #, slice_positions=batch_positions)
             loss = F.mse_loss(noise_prediction, noise)
 
             # log metrics to wandb
@@ -223,7 +223,7 @@ if __name__ == "__main__":
 
     # Setup directory to store the model parameters
     filepath = "Saved Models"
-    filename = f'{run_name}_{epochs}_epochs_{resolution[0]}_x_res_position_embed.pth'
+    filename = f'{run_name}_{epochs}_epochs_{resolution[0]}_x_res.pth'
 
     # Create the directory if it doesn't exist
     os.makedirs(filepath, exist_ok=True)
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     class_indices = [i for i in range(1)] # First 4 classes # len(dataset.genres))]  # One sample per class
 
     # Generate positional indices
-    slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
+    #slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
 
     # Batch size is equal to the number of classes
     batch_size = len(class_indices)
@@ -269,7 +269,7 @@ if __name__ == "__main__":
         # Create a tensor filled with the current timestep for the batch
         batch_step = torch.full((shape[0],), step, device=device, dtype=torch.long)
         
-        model_output = model(images, batch_step, class_labels=class_labels, slice_positions=slice_positions).detach() # Detaching prevents memory build up at each step
+        model_output = model(images, batch_step, class_labels=class_labels) #, slice_positions=slice_positions).detach() # Detaching prevents memory build up at each step
 
         # Perform the scheduler step and update images in-place
         images.copy_(noise_scheduler.step(

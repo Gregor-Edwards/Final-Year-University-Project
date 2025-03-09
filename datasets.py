@@ -223,70 +223,21 @@ class GTZANDataset(Dataset):
     
 
 if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-    import torchaudio
-    import librosa.display
-    from IPython.display import Audio, display
-    import sounddevice as sd
+    # Testing
+    import tests
 
-
-    # Initialize dataset
+    # Initialise dataset
     root_dir = "GTZAN_Genre_Collection/genres"
-    spectrogram_dir = "GTZAN_Genre_Collection/slices"
+    spectrogram_dir = "GTZAN_Genre_Collection/test_slices"
     resolution = (256, 256)  # Resolution of mel-spectrogram slices
     dataset = GTZANDataset(resolution, root_dir, spectrogram_dir)
+    dataset.hop_length = 512 #1024
+    dataset.n_fft = 2048
+    dataset.top_db = 80
+    dataset.n_iter = 100 # Number of iterations for Griffin Linn mel inversion
 
-    # Get the first file in the dataset
-    if len(dataset.files) == 0:
-        raise ValueError("No audio files found in the dataset!")
-    
-    audio_path, genre = dataset.files[0]  # Retrieve the first audio file and its genre
-    print(f"Testing file: {audio_path}, Genre: {genre}")
+    # TODO: Test the dataset setup
+    # TODO: Assert that the folder does not already exist
+    tests.test_dataset_setup(dataset)
 
-    # Load the audio file
-    waveform, sample_rate = torchaudio.load(audio_path)
-    print(f"Loaded waveform shape: {waveform.shape}, Sample rate: {sample_rate}")
-
-    # Ensure the waveform is mono
-    if waveform.ndim == 2:
-        waveform = waveform.mean(dim=0)  # Convert to mono by averaging channels
-
-    waveform = waveform.numpy()
-
-    # Convert the waveform to a mel-spectrogram
-    mel_spectrogram = dataset.audio_to_mel_spectrogram(waveform)
-    print(f"Generated mel-spectrogram of size: {mel_spectrogram.size}")
-
-    # Display the mel-spectrogram
-    plt.figure(figsize=(10, 4))
-    plt.imshow(mel_spectrogram, cmap='inferno', aspect='auto')
-    plt.title(f"Mel-Spectrogram for File: {audio_path}")
-    plt.xlabel('Time')
-    plt.ylabel('Frequency')
-    plt.colorbar(label='Intensity')
-    plt.show()
-
-    # Convert the mel-spectrogram back to audio
-    reconstructed_audio = dataset.mel_spectrogram_to_audio(mel_spectrogram)
-    print(f"Reconstructed audio length: {len(reconstructed_audio)}, Sample rate: {dataset.sample_rate}")
-
-    # Compare the original and reconstructed audio
-    plt.figure(figsize=(15, 5))
-    plt.subplot(2, 1, 1)
-    plt.title("Original Audio")
-    plt.plot(waveform)
-    plt.subplot(2, 1, 2)
-    plt.title("Reconstructed Audio")
-    plt.plot(reconstructed_audio)
-    plt.tight_layout()
-    plt.show()
-
-    # Listen to original and reconstructed audio (use IPython.display for playback in notebooks)
-    print("Playing Original Audio:")
-    display(Audio(waveform, rate=dataset.sample_rate))
-    sd.play(waveform, dataset.sample_rate)
-    sd.wait()
-    print("Playing Reconstructed Audio:")
-    display(Audio(reconstructed_audio, rate=dataset.sample_rate))
-    sd.play(reconstructed_audio, dataset.sample_rate)
-    sd.wait()
+    tests.test_mel_spectrogram_conversion(dataset)

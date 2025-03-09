@@ -1,4 +1,4 @@
-import models
+import diffusion_models
 import datasets
 import torch
 import os
@@ -19,22 +19,24 @@ noise_scheduler = DDPMScheduler(
     beta_schedule="linear"
 ) # 4000 timesteps
 
-resolution = (64, 64)# (256, 256)
+resolution = (256, 256) # (64, 64)
 num_classes = 10
-max_slice_position = 18
+#max_slice_position = 18
 device = "cuda" if torch.cuda.is_available() else "cpu"
-torch.manual_seed(0) # use seed for reproducability
+seed = 0
+torch.manual_seed(seed) # use seed for reproducability
 
-model = models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes, max_position=max_slice_position).to(device)
+model = diffusion_models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes).to(device)#, max_position=max_slice_position).to(device)
 dataset = datasets.GTZANDataset(resolution=resolution, root_dir="GTZAN_Genre_Collection/genres", spectrogram_dir="GTZAN_Genre_Collection/slices")
 
 
 # Setup directory to store the model parameters
 filepath = "Saved Models"
-# filename = 'Date_02_03_2025_100_epochs_1000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 1000 timesteps
-# filename = 'Date_03_03_2025_100_epochs_4000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 4000 timesteps
-filename = 'Date_05_03_2025_16_18_22_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 1
-
+# filename = 'Date_02_03_2025_100_epochs_1000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 1000 timesteps 64x64
+filename = 'Date_03_03_2025_100_epochs_4000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 4000 timesteps 256x256
+# filename = 'Date_05_03_2025_16_18_22_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 1
+# filename = 'Date_06_03_2025_11_25_30_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 2
+# filename = 'Date_06_03_2025_23_31_27_200_epochs_4000_timesteps_class_embeddings_GTZAN_200_epochs_64_x_res.pth' # 4000 timesteps more epochs
 
 # Create the directory if it doesn't exist
 os.makedirs(filepath, exist_ok=True)
@@ -49,10 +51,10 @@ model.eval() # Set the model to evaluation mode
 # Sample new audio using the trained model
 
 # Generate labels: 1 sample for each class (len(dataset.genres) total classes)
-class_indices = [i for i in range(10)] # First 4 classes # len(dataset.genres))]  # One sample per class
+class_indices = [i for i in range(4)] # First 4 classes # len(dataset.genres))]  # One sample per class
 
 # Generate positional indices
-slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
+#slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
 
 # Batch size is equal to the number of classes
 batch_size = len(class_indices)
@@ -77,7 +79,7 @@ for step in tqdm(reversed(range(0, timesteps)), desc="Sampling timestep", unit="
     # Create a tensor filled with the current timestep for the batch
     batch_step = torch.full((shape[0],), step, device=device, dtype=torch.long)
     
-    model_output = model(images, batch_step, class_labels=class_labels, slice_positions=slice_positions).detach() # Detaching prevents memory build up at each step
+    model_output = model(images, batch_step, class_labels=class_labels).detach()#, slice_positions=slice_positions).detach() # Detaching prevents memory build up at each step
 
     # Perform the scheduler step and update images in-place
     images.copy_(noise_scheduler.step(
@@ -109,7 +111,7 @@ os.makedirs(folder, exist_ok=True)
 
 # Save final images
 for idx, image in enumerate(images):
-    output_file = os.path.join(folder, f'TEST_IMAGE_{idx}')
+    output_file = os.path.join(folder, f'TEST_IMAGE_{idx}_seed_{seed}')
     output_mel_spectrogram = output_file + ".png"
 
     # Save the generated spectrogram image
