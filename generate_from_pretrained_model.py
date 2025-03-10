@@ -8,7 +8,7 @@ from PIL import Image
 import torchaudio
 
 
-def generate(model, noise_scheduler, max_timesteps, shape, class_labels, display_steps=False):
+def generate(model, device, noise_scheduler, max_timesteps, shape, class_labels, display_steps=False):
     """ Performs the reverse diffusion for a given model, starting with random noise in the shape of the batch to be generated, then repeatedly removing the predicted noise from the images until a class conditioned audio sample is obtained.
         It then processes the generated samples into a format that can be displayed.
         Optionally displays the reverse diffusion process at each 1/5 of the steps"""
@@ -105,7 +105,7 @@ if __name__ == '__main__':
         beta_schedule="linear"
     ) # 4000 timesteps
 
-    resolution = (64, 64) # (256, 256)
+    resolution = (256, 256) # (64, 64)
     num_classes = 10
     #max_slice_position = 18
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -119,10 +119,10 @@ if __name__ == '__main__':
     # Setup directory to store the model parameters
     filepath = "Saved Models"
     # filename = 'Date_02_03_2025_100_epochs_1000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 1000 timesteps 64x64
-    # filename = 'Date_03_03_2025_100_epochs_4000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 4000 timesteps 256x256
+    filename = 'Date_03_03_2025_100_epochs_4000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 4000 timesteps 256x256
     #filename = 'Date_05_03_2025_16_18_22_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 1
     # filename = 'Date_06_03_2025_11_25_30_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 2
-    filename = 'Date_06_03_2025_23_31_27_200_epochs_4000_timesteps_class_embeddings_GTZAN_200_epochs_64_x_res.pth' # 4000 timesteps more epochs
+    #filename = 'Date_06_03_2025_23_31_27_200_epochs_4000_timesteps_class_embeddings_GTZAN_200_epochs_64_x_res.pth' # 4000 timesteps more epochs
 
     # Create the directory if it doesn't exist
     os.makedirs(filepath, exist_ok=True)
@@ -137,7 +137,7 @@ if __name__ == '__main__':
     # Sample new audio using the trained model
 
     # Generate labels: 1 sample for each class (len(dataset.genres) total classes)
-    class_indices = [i for i in range(10)] # First n classes # len(dataset.genres))]  # One sample per class
+    class_indices = [i for i in range(5, 10)] # First n classes # len(dataset.genres))]  # One sample per class
 
     # Generate positional indices
     #slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
@@ -156,7 +156,7 @@ if __name__ == '__main__':
 
     # Perform reverse diffusion
 
-    images = generate(model, noise_scheduler, timesteps, shape, class_labels, display_steps=True)
+    images = generate(model, device, noise_scheduler, timesteps, shape, class_labels, display_steps=True)
 
 
 
@@ -171,7 +171,7 @@ if __name__ == '__main__':
     # Create the directory if it doesn't exist
     os.makedirs(folder, exist_ok=True)
 
-    save_samples(images, folder, "Test_Batch", True)
+    save_samples(images, folder, "Test_Batch_256", True)
 
     # # # Save final images
     # # for idx, image in enumerate(images):

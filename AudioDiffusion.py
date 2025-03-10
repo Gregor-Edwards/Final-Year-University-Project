@@ -37,8 +37,8 @@ if __name__ == "__main__":
     # Initialise constants
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0) # use seed for reproducability
-    resolution = (64, 64) # (128, 128) Compromise? #(256, 256) better quality but too large to train on my current GPU #(64, 64) best for training quickly #dataset[0]["image"].height, dataset[0]["image"].width
-    batch_size = 64 #4 if the resolution is lower, a higher batch_size can be used before the vram on the GPU is used up
+    resolution = (256, 256) #(64, 64) # (128, 128) Compromise? #(256, 256) better quality but too large to train on my current GPU #(64, 64) best for training quickly #dataset[0]["image"].height, dataset[0]["image"].width
+    batch_size = 4 #64 #4 if the resolution is lower, a higher batch_size can be used before the vram on the GPU is used up
 
     # Initialise forward diffusion parameters
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     channels = 1 # Mono audio
     num_classes = len(dataset.genres)
 
-    epochs = 200 # 100 #2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    epochs = 100 # 200 # 100 #2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
     learning_rate = 1e-4#, 1e-3] # 1e-5, too low with a learning rate scheduler, 1e-3 too high
     num_classes = len(dataset.genres)
 
@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
 
     # Learning rate scheduler
-    warmup_steps = 5000 # 500
+    warmup_steps = 50000 # 500
     num_steps_per_epoch = len(dataloader)
     total_training_steps = num_steps_per_epoch * epochs
 
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     print("Class labels: ", class_labels)
 
     # Perform reverse diffusion
-    images = generate_from_pretrained_model.generate(model, noise_scheduler, timesteps, shape, class_labels)
+    images = generate_from_pretrained_model.generate(model, device, noise_scheduler, timesteps, shape, class_labels)
 
 
 
