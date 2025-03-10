@@ -8,10 +8,16 @@ from PIL import Image
 import torchaudio
 
 
-def generate(model, noise_scheduler, max_timesteps, shape, class_labels):
+def generate(model, noise_scheduler, max_timesteps, shape, class_labels, display_steps=False):
     """ Performs the reverse diffusion for a given model, starting with random noise in the shape of the batch to be generated, then repeatedly removing the predicted noise from the images until a class conditioned audio sample is obtained.
-        It then processes the generated samples into a format that can be displayed."""
+        It then processes the generated samples into a format that can be displayed.
+        Optionally displays the reverse diffusion process at each 1/5 of the steps"""
     
+    # Set intervals for displaying intermediate steps
+    display_intervals = []
+    if display_steps:
+        display_intervals = [0, 99, 199, 299, 399, 499, 599, 999, 1999, 2999, 3999] #max_timesteps * i // (num_intervals - 1) for i in range(num_intervals)]
+
     # Initialise noise for the batch
     images = torch.randn(shape, device=device)
 
@@ -31,6 +37,22 @@ def generate(model, noise_scheduler, max_timesteps, shape, class_labels):
             generator=None,
         )["prev_sample"].detach())
 
+        # Save intermediate results if the current step matches a display interval
+        if display_steps and step in display_intervals:
+            print(f"Saving diffusion process at step {step}")
+            intermediate_images = preprocess_images(images)
+            save_samples(intermediate_images, os.path.join("Generated_Images", "Reverse Diffusion"), step)
+
+            
+
+    # Process the images
+    images = preprocess_images(images)
+
+    return images
+
+def preprocess_images(images):
+    """Processes the generated samples from the model into a format that can be displayed."""
+    
     # Normalise the image pixel values
     images = (images / 2 + 0.5).clamp(0, 1) # During pre-processing, the range is from -1 to 1
 
@@ -45,6 +67,32 @@ def generate(model, noise_scheduler, max_timesteps, shape, class_labels):
 
     return images
 
+def save_samples(images, folder_path, batch_name="TEST_IMAGE", save_audio=False):
+
+    # Ensure the directory exists
+    print("FOLDER PATH: ", folder_path)
+    os.makedirs(folder_path, exist_ok=True)
+
+    # Save final images
+    for idx, image in enumerate(images):
+        output_file = os.path.join(folder_path, f'{batch_name}_{idx}_seed_{seed}')
+        output_mel_spectrogram = output_file + ".png"
+
+        # Save the generated spectrogram image
+        image.save(output_mel_spectrogram)
+        print(f"Generated spectrogram {idx} saved!")
+
+        if save_audio:
+            # Load the generated spectrograms and convert to audio
+            generated_spectrogram_file = output_mel_spectrogram#os.path.join(folder, "output_audio_0_100_epochs_64_x_res_640_y_res.png")
+            image = Image.open(generated_spectrogram_file)
+            audio = dataset.mel_spectrogram_to_audio(image)
+            audio_tensor = torch.tensor(audio).unsqueeze(0) # Add channel dimension due to the mono audio output (duplicate the channel so that the audio can be played)
+
+            # Save the audio file
+            output_audio_path = generated_spectrogram_file.replace(".png", ".wav")
+            torchaudio.save(output_audio_path, audio_tensor, dataset.sample_rate)
+            print(f"Audio {idx} saved!")
 
 
 if __name__ == '__main__':
@@ -108,9 +156,11 @@ if __name__ == '__main__':
 
     # Perform reverse diffusion
 
-    images = generate(model, noise_scheduler, timesteps, shape, class_labels)
+    images = generate(model, noise_scheduler, timesteps, shape, class_labels, display_steps=True)
 
 
+
+    # Save the generated samples
 
     # Setup directory to store the generated audio mel-spectrograms
     folder1 = "Generated_Images"
@@ -121,22 +171,24 @@ if __name__ == '__main__':
     # Create the directory if it doesn't exist
     os.makedirs(folder, exist_ok=True)
 
-    # Save final images
-    for idx, image in enumerate(images):
-        output_file = os.path.join(folder, f'TEST_IMAGE_{idx}_seed_{seed}')
-        output_mel_spectrogram = output_file + ".png"
+    save_samples(images, folder, "Test_Batch", True)
 
-        # Save the generated spectrogram image
-        image.save(output_mel_spectrogram)
-        print(f"Generated spectrogram {idx} saved!")
+    # # # Save final images
+    # # for idx, image in enumerate(images):
+    # #     output_file = os.path.join(folder, f'TEST_IMAGE_{idx}_seed_{seed}')
+    # #     output_mel_spectrogram = output_file + ".png"
 
-        # Load the generated spectrograms and convert to audio
-        generated_spectrogram_file = output_mel_spectrogram#os.path.join(folder, "output_audio_0_100_epochs_64_x_res_640_y_res.png")
-        image = Image.open(generated_spectrogram_file)
-        audio = dataset.mel_spectrogram_to_audio(image)
-        audio_tensor = torch.tensor(audio).unsqueeze(0) # Add channel dimension due to the mono audio output (duplicate the channel so that the audio can be played)
+    # #     # Save the generated spectrogram image
+    # #     image.save(output_mel_spectrogram)
+    # #     print(f"Generated spectrogram {idx} saved!")
 
-        # Save the audio file
-        output_audio_path = generated_spectrogram_file.replace(".png", ".wav")
-        torchaudio.save(output_audio_path, audio_tensor, dataset.sample_rate)
-        print(f"Audio {idx} saved!")
+    # #     # Load the generated spectrograms and convert to audio
+    # #     generated_spectrogram_file = output_mel_spectrogram#os.path.join(folder, "output_audio_0_100_epochs_64_x_res_640_y_res.png")
+    # #     image = Image.open(generated_spectrogram_file)
+    # #     audio = dataset.mel_spectrogram_to_audio(image)
+    # #     audio_tensor = torch.tensor(audio).unsqueeze(0) # Add channel dimension due to the mono audio output (duplicate the channel so that the audio can be played)
+
+    # #     # Save the audio file
+    # #     output_audio_path = generated_spectrogram_file.replace(".png", ".wav")
+    # #     torchaudio.save(output_audio_path, audio_tensor, dataset.sample_rate)
+    # #     print(f"Audio {idx} saved!")
