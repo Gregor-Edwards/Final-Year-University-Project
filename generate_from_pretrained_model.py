@@ -114,15 +114,23 @@ if __name__ == '__main__':
 
     model = diffusion_models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes).to(device)#, max_position=max_slice_position).to(device)
     dataset = datasets.GTZANDataset(resolution=resolution, root_dir="GTZAN_Genre_Collection/genres", spectrogram_dir="GTZAN_Genre_Collection/slices")
+    # TODO: Make sure that the hop-length, n_iter parameters are set correctly for the given pre-trained model
+    dataset.hop_length = 512
+    dataset.n_iter = 100
 
 
     # Setup directory to store the model parameters
     filepath = "Saved Models"
+    # 1024 hop_length 32 n_iter
     # filename = 'Date_02_03_2025_100_epochs_1000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 1000 timesteps 64x64
-    filename = 'Date_03_03_2025_100_epochs_4000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 4000 timesteps 256x256
-    #filename = 'Date_05_03_2025_16_18_22_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 1
-    # filename = 'Date_06_03_2025_11_25_30_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 2
-    #filename = 'Date_06_03_2025_23_31_27_200_epochs_4000_timesteps_class_embeddings_GTZAN_200_epochs_64_x_res.pth' # 4000 timesteps more epochs
+    # filename = 'Date_03_03_2025_100_epochs_4000_timesteps_0.95_0.0001_lr_class_conditioned_GTZAN_100_epochs.pth' #f'{run_name}_{epochs}_epochs.pth' # Test 4000 timesteps 256x256 (doesn't work with current code)
+    # filename = 'Date_05_03_2025_16_18_22_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 1 (shouldn't work)
+    # filename = 'Date_06_03_2025_11_25_30_100_epochs_4000_timesteps_class__position_embeddings_GTZAN_100_epochs_64_x_res_position_embed.pth' # Positional embedding part 2 (shouldn't work)
+    #filename = 'Date_06_03_2025_23_31_27_200_epochs_4000_timesteps_class_embeddings_GTZAN_200_epochs_64_x_res.pth' # 4000 timesteps more epochs (works with current code)
+
+    # 256x256 512 hop_length, 100 n_iter, 4000 timesteps
+    filename = 'Date_10_03_2025_01_44_19_100_epochs_4000_timesteps_class_embeddings_GTZAN_100_epochs_256_x_res.pth'
+
 
     # Create the directory if it doesn't exist
     os.makedirs(filepath, exist_ok=True)
@@ -137,14 +145,14 @@ if __name__ == '__main__':
     # Sample new audio using the trained model
 
     # Generate labels: 1 sample for each class (len(dataset.genres) total classes)
-    class_indices = [i for i in range(5, 10)] # First n classes # len(dataset.genres))]  # One sample per class
+    class_indices = [2,3]#[i for i in range(2)] # First n classes # len(dataset.genres))]  # One sample per class
 
     # Generate positional indices
     #slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
 
     # Batch size is equal to the number of classes
     batch_size = len(class_indices)
-    shape = (batch_size, 1, resolution[0], resolution[1])  # Shape of spectrogram: (batch_size, channels, height, width/length)
+    shape = (batch_size, 1, resolution[0], resolution[1] * 2)  # Shape of spectrogram: (batch_size, channels, height, width/length)
 
     # Convert class indices into a tensor of shape (batch_size,)
     class_labels = torch.tensor(class_indices, device=device)  # Shape: (batch_size,)
@@ -172,23 +180,3 @@ if __name__ == '__main__':
     os.makedirs(folder, exist_ok=True)
 
     save_samples(images, folder, "Test_Batch_256", True)
-
-    # # # Save final images
-    # # for idx, image in enumerate(images):
-    # #     output_file = os.path.join(folder, f'TEST_IMAGE_{idx}_seed_{seed}')
-    # #     output_mel_spectrogram = output_file + ".png"
-
-    # #     # Save the generated spectrogram image
-    # #     image.save(output_mel_spectrogram)
-    # #     print(f"Generated spectrogram {idx} saved!")
-
-    # #     # Load the generated spectrograms and convert to audio
-    # #     generated_spectrogram_file = output_mel_spectrogram#os.path.join(folder, "output_audio_0_100_epochs_64_x_res_640_y_res.png")
-    # #     image = Image.open(generated_spectrogram_file)
-    # #     audio = dataset.mel_spectrogram_to_audio(image)
-    # #     audio_tensor = torch.tensor(audio).unsqueeze(0) # Add channel dimension due to the mono audio output (duplicate the channel so that the audio can be played)
-
-    # #     # Save the audio file
-    # #     output_audio_path = generated_spectrogram_file.replace(".png", ".wav")
-    # #     torchaudio.save(output_audio_path, audio_tensor, dataset.sample_rate)
-    # #     print(f"Audio {idx} saved!")
