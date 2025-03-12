@@ -362,7 +362,9 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         self.combined_mlp = nn.Sequential(
             nn.Linear(combined_size, temb_channels),  # Reduce to match embedding size
             nn.GELU(),
+            nn.Dropout(p=0.2),  # Dropout for regularisation
             nn.Linear(temb_channels, temb_channels),  # Final projection
+            nn.GELU()  # Stabilisation
         )
 
         #self.layer_norm = nn.LayerNorm(temb_channels) # Used to normalise each embedding so that one embedding does not dominate over the others
@@ -389,6 +391,9 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         #temb = self.layer_norm(temb)
         #class_emb = self.layer_norm(class_emb)
         #positional_emb = self.layer_norm(positional_emb)
+        # Normalize timestep and class embeddings separately
+        temb = nn.functional.normalize(temb, p=2, dim=-1)  # L2 normalization
+        class_emb = nn.functional.normalize(class_emb, p=2, dim=-1)
         
         # Combine timestep, class, and positional embeddings
         combined_emb = torch.cat([temb, class_emb], dim=-1) # torch.cat([temb, class_emb, positional_emb], dim=-1)
@@ -463,5 +468,5 @@ class ClassConditionedAudioUnet2D(AudioUnet2D):
         x = self.up2_block2(x, temb)#, class_emb)
 
         prediction = self.final_conv(x)
-        
+
         return prediction

@@ -88,10 +88,11 @@ def save_samples(images, folder_path, batch_name="TEST_IMAGE", save_audio=False)
             image = Image.open(generated_spectrogram_file)
             audio = dataset.mel_spectrogram_to_audio(image)
             audio_tensor = torch.tensor(audio).unsqueeze(0) # Add channel dimension due to the mono audio output (duplicate the channel so that the audio can be played)
+            reconstructed_audio = audio_tensor / torch.max(torch.abs(reconstructed_audio)) # Normalise the audio so that the volume matches normal levels and is not so quiet
 
             # Save the audio file
             output_audio_path = generated_spectrogram_file.replace(".png", ".wav")
-            torchaudio.save(output_audio_path, audio_tensor, dataset.sample_rate)
+            torchaudio.save(output_audio_path, reconstructed_audio, dataset.sample_rate)
             print(f"Audio {idx} saved!")
 
 
@@ -115,8 +116,8 @@ if __name__ == '__main__':
     model = diffusion_models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes).to(device)#, max_position=max_slice_position).to(device)
     dataset = datasets.GTZANDataset(resolution=resolution, root_dir="GTZAN_Genre_Collection/genres", spectrogram_dir="GTZAN_Genre_Collection/slices")
     # TODO: Make sure that the hop-length, n_iter parameters are set correctly for the given pre-trained model
-    dataset.hop_length = 1024 #512
-    dataset.n_iter = 32 #100
+    dataset.hop_length = 512 #1024
+    dataset.n_iter = 100 #32
 
 
     # Setup directory to store the model parameters

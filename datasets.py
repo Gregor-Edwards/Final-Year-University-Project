@@ -48,11 +48,11 @@ class GTZANDataset(Dataset):
 
         # Mel-spectrogram time-slice conversion
         self.resolution = resolution # (64, 64) # Resolution of each time slice (number of frequency bins, number of time steps / frames)
-        self.hop_length = 1024 #512
+        self.hop_length = 512 #1024
         self.sample_rate = 22050
         self.n_fft = 2048
         self.top_db = 80
-        self.n_iter = 32 #100 # Number of iterations for Griffin Linn mel inversion
+        self.n_iter = 100 # 32 # Number of iterations for Griffin Linn mel inversion
         self.spectrogram_slices = [] # Stores each time slice of the converted mel-spectrograms. These are the actual items used in the diffusion process
 
         # Add each file to the dataset

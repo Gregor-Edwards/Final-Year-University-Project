@@ -77,7 +77,7 @@ if __name__ == "__main__":
     channels = 1 # Mono audio
     num_classes = len(dataset.genres)
 
-    epochs = 100 # 200 # 100 #2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
+    epochs = 20 #100 # 200 # 100 #2000#2000 # 20 epochs or above starts to produce 'reasonable' quality images but it takes longer time
     learning_rate = 1e-4#, 1e-3] # 1e-5, too low with a learning rate scheduler, 1e-3 too high
     num_classes = len(dataset.genres)
 
@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
 
     # Learning rate scheduler
-    warmup_steps = 5000 # 500
+    warmup_steps = 50000 # 500
     num_steps_per_epoch = len(dataloader)
     total_training_steps = num_steps_per_epoch * epochs
 
