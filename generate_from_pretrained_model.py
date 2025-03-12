@@ -115,8 +115,8 @@ if __name__ == '__main__':
     model = diffusion_models.ClassConditionedAudioUnet2D(sample_size=resolution, num_classes=num_classes).to(device)#, max_position=max_slice_position).to(device)
     dataset = datasets.GTZANDataset(resolution=resolution, root_dir="GTZAN_Genre_Collection/genres", spectrogram_dir="GTZAN_Genre_Collection/slices")
     # TODO: Make sure that the hop-length, n_iter parameters are set correctly for the given pre-trained model
-    dataset.hop_length = 512
-    dataset.n_iter = 100
+    dataset.hop_length = 1024 #512
+    dataset.n_iter = 32 #100
 
 
     # Setup directory to store the model parameters
@@ -129,8 +129,10 @@ if __name__ == '__main__':
     #filename = 'Date_06_03_2025_23_31_27_200_epochs_4000_timesteps_class_embeddings_GTZAN_200_epochs_64_x_res.pth' # 4000 timesteps more epochs (works with current code)
 
     # 256x256 512 hop_length, 100 n_iter, 4000 timesteps
-    filename = 'Date_10_03_2025_01_44_19_100_epochs_4000_timesteps_class_embeddings_GTZAN_100_epochs_256_x_res.pth'
+    #filename = 'Date_10_03_2025_01_44_19_100_epochs_4000_timesteps_class_embeddings_GTZAN_100_epochs_256_x_res.pth'
 
+    # 256x256 1024 hop_length
+    filename = 'Date_11_03_2025_12_33_56_100_epochs_4000_timesteps_class_embeddings_GTZAN_100_epochs_256_x_res.pth'
 
     # Create the directory if it doesn't exist
     os.makedirs(filepath, exist_ok=True)
@@ -145,14 +147,14 @@ if __name__ == '__main__':
     # Sample new audio using the trained model
 
     # Generate labels: 1 sample for each class (len(dataset.genres) total classes)
-    class_indices = [2,3]#[i for i in range(2)] # First n classes # len(dataset.genres))]  # One sample per class
+    class_indices = [i for i in range(4)] # First n classes # len(dataset.genres))]  # One sample per class
 
     # Generate positional indices
     #slice_positions = torch.tensor([0] * len(class_indices), device=device)  # Shape: (batch_size,)
 
     # Batch size is equal to the number of classes
     batch_size = len(class_indices)
-    shape = (batch_size, 1, resolution[0], resolution[1] * 2)  # Shape of spectrogram: (batch_size, channels, height, width/length)
+    shape = (batch_size, 1, resolution[0], resolution[1]) # * 2)  # Shape of spectrogram: (batch_size, channels, height, width/length)
 
     # Convert class indices into a tensor of shape (batch_size,)
     class_labels = torch.tensor(class_indices, device=device)  # Shape: (batch_size,)

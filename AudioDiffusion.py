@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
 
     # Learning rate scheduler
-    warmup_steps = 50000 # 500
+    warmup_steps = 5000 # 500
     num_steps_per_epoch = len(dataloader)
     total_training_steps = num_steps_per_epoch * epochs
 
